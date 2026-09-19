@@ -4,10 +4,15 @@ import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
 import { BELEG_MAX, BELEG_TYPEN, registerExpenseRoutes } from "./expenses.ts";
-import { registerGroupRoutes } from "./groups.ts";
+import { istMitglied, registerGroupRoutes } from "./groups.ts";
 import { erkenneSumme, tesseract, type Texterkennung } from "./erkennung.ts";
 import { frankfurter, type Kursdienst } from "./kurs.ts";
-import { anmeldeseite, startseite } from "./pages.ts";
+import {
+  anmeldeseite,
+  gruppenseite,
+  profilseite,
+  startseite,
+} from "./pages.ts";
 
 export const SESSION_COOKIE = "session";
 
@@ -75,8 +80,8 @@ export function createApp(
         start_url: "/",
         scope: "/",
         display: "standalone",
-        background_color: "#1e785a",
-        theme_color: "#1e785a",
+        background_color: "#ffffff",
+        theme_color: "#7c3aed",
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
@@ -95,16 +100,48 @@ export function createApp(
       }),
   );
 
+  // Favicon: Browser fragen oft direkt /favicon.ico.
+  app.get("/favicon.ico", (c) =>
+    c.body(SYMBOLE["icon-192.png"], 200, {
+      "content-type": "image/png",
+      "cache-control": "public, max-age=86400",
+    }));
+
+  app.get("/gruppen/:id{[0-9]+}", (c) => {
+    const user = c.get("user");
+    if (!user) return c.redirect("/");
+    const id = Number(c.req.param("id"));
+    if (!istMitglied(db, id, user.id)) return c.redirect("/");
+    return c.html(gruppenseite(id));
+  });
+
+  app.patch("/api/me", async (c) => {
+    const user = c.get("user");
+    if (!user) return c.json({ fehler: "Nicht angemeldet" }, 401);
+    const body = await c.req.json().catch(() => ({})) as { name?: unknown };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return c.json({ fehler: "Name fehlt" }, 400);
+    if (name.length > 60) return c.json({ fehler: "Name ist zu lang" }, 400);
+    db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, user.id);
+    return c.json({ id: user.id, name });
+  });
+
   app.get("/", (c) => {
     const user = c.get("user");
     if (!user) return c.html(anmeldeseite(config.domain));
+    return c.html(startseite(user));
+  });
+
+  app.get("/profil", (c) => {
+    const user = c.get("user");
+    if (!user) return c.redirect("/");
     const nutzer = user.is_admin === 1
       ? db.prepare("SELECT id, name FROM users ORDER BY name").all() as {
         id: number;
         name: string;
       }[]
       : [];
-    return c.html(startseite(user, nutzer));
+    return c.html(profilseite(user, nutzer));
   });
 
   app.get("/api/health", (c) => c.json({ ok: true }));

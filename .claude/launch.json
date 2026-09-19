@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev-server",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "APP_DOMAIN=localhost PORT=8888 deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run=tesseract src/main.ts"],
+      "url": "http://localhost:8888"
+    }
+  ]
+}
