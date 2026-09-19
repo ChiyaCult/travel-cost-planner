@@ -930,13 +930,24 @@ Deno.test("Beleg: nur der Zahler kann ihn entfernen", async () => {
   assertEquals((await del(anna.headers)).status, 404);
 });
 
-Deno.test("Startseite (angemeldet) bietet Beleg hinzufügen und entfernen", async () => {
+Deno.test("Gruppenseite bietet Beleg hinzufügen und entfernen; Fremde werden umgeleitet", async () => {
   const { app, db } = frischeApp();
   const { headers } = createTestSession(db, { name: "Anna" });
-  const html = await (await app.request("/", { headers })).text();
+  const ben = createTestSession(db, { name: "Ben" });
+  const g = await (await app.request("/api/gruppen", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ name: "Japan" }),
+  })).json();
+  const fremd = await app.request(`/gruppen/${g.id}`, { headers: ben.headers });
+  assertEquals(fremd.status, 302);
+  const html = await (await app.request(`/gruppen/${g.id}`, { headers }))
+    .text();
   assertStringIncludes(html, "Beleg hinzufügen");
   assertStringIncludes(html, "Beleg entfernen");
   assertStringIncludes(html, 'method: "DELETE"');
+  assertStringIncludes(html, 'id="plus-mitglied"');
+  assertStringIncludes(html, 'url("/kandidaten")');
 });
 
 Deno.test("Summenvorschlag: liefert Yen aus der Erkennung, ohne Anmeldung 401", async () => {
@@ -998,4 +1009,36 @@ Deno.test("Web-App-Manifest und Symbole sind ohne Anmeldung abrufbar", async () 
   }
   const html = await (await app.request("/")).text();
   assertStringIncludes(html, 'rel="manifest"');
+  assertStringIncludes(html, 'rel="icon"');
+  assertEquals((await app.request("/favicon.ico")).status, 200);
+});
+
+Deno.test("Schriften kommen vom eigenen Server, nicht von Google", async () => {
+  const { app } = frischeApp();
+  const html = await (await app.request("/")).text();
+  assertEquals(html.includes("fonts.googleapis.com"), false);
+  for (const datei of ["dotgothic16", "silkscreen"]) {
+    const r = await app.request(`/schriften/${datei}.woff2`);
+    assertEquals(r.status, 200);
+    assertEquals(r.headers.get("content-type"), "font/woff2");
+    const kopf = new Uint8Array(await r.arrayBuffer()).slice(0, 4);
+    assertEquals(new TextDecoder().decode(kopf), "wOF2");
+  }
+  assertEquals((await app.request("/schriften/fremd.woff2")).status, 404);
+});
+
+Deno.test("Eigenen Namen ändern: PATCH /api/me", async () => {
+  const { app, db } = frischeApp();
+  const { headers } = createTestSession(db, { name: "admin" });
+  const patch = (h: Record<string, string>, name: unknown) =>
+    app.request("/api/me", {
+      method: "PATCH",
+      headers: { ...h, "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+  assertEquals((await patch({}, "X")).status, 401);
+  assertEquals((await patch(headers, "  ")).status, 400);
+  assertEquals((await patch(headers, " Chiya ")).status, 200);
+  const me = await (await app.request("/api/me", { headers })).json();
+  assertEquals(me.name, "Chiya");
 });
