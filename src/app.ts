@@ -2,6 +2,7 @@ import { Hono } from "@hono/hono";
 import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
+import { registerGroupRoutes } from "./groups.ts";
 import { anmeldeseite, startseite } from "./pages.ts";
 
 export const SESSION_COOKIE = "session";
@@ -38,6 +39,7 @@ export function createApp(db: DatabaseSync, config: Config): Hono<Env> {
   });
 
   registerAuthRoutes(app, db, config);
+  registerGroupRoutes(app, db);
 
   app.get("/", (c) => {
     const user = c.get("user");
