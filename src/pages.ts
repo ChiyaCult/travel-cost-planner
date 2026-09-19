@@ -101,6 +101,38 @@ async function gruppenLaden() {
       } catch (e) { meldung(e.message); }
     };
     li.append(sel);
+    const d = document.createElement("details");
+    d.innerHTML = "<summary>Ausgaben</summary>" +
+      '<form><input name="betrag" inputmode="decimal" placeholder="Betrag in €" required> ' +
+      '<input name="beschreibung" placeholder="Beschreibung" required> ' +
+      '<input name="datum" type="date"><button>Eintragen</button></form>' +
+      '<div class="schulden"></div><ul class="ausgaben"></ul>';
+    const eur = (c) => (c / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
+    const laden = async () => {
+      const [a, s] = await Promise.all([
+        fetch("/api/gruppen/" + g.id + "/ausgaben").then((r) => r.json()),
+        fetch("/api/gruppen/" + g.id + "/schulden").then((r) => r.json()),
+      ]);
+      d.querySelector(".schulden").textContent = s.length
+        ? s.map((x) => x.von.name + " schuldet " + x.an.name + " " + eur(x.betragCent)).join("; ")
+        : "Keine Schulden.";
+      d.querySelector(".ausgaben").replaceChildren(...a.map((x) => {
+        const e = document.createElement("li");
+        e.textContent = x.datum + " · " + x.zahler.name + " · " + eur(x.betragCent) + " · " + x.beschreibung;
+        return e;
+      }));
+    };
+    d.addEventListener("toggle", () => { if (d.open) laden(); });
+    d.querySelector("form").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const cent = Math.round(Number(String(f.get("betrag")).replace(",", ".")) * 100);
+      const body = { betragCent: cent, beschreibung: f.get("beschreibung") };
+      if (f.get("datum")) body.datum = f.get("datum");
+      try { await post("/api/gruppen/" + g.id + "/ausgaben", body); e.target.reset(); laden(); }
+      catch (err) { meldung(err.message); }
+    };
+    li.append(d);
     return li;
   }));
 }
