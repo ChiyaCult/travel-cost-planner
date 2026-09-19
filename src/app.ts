@@ -112,7 +112,7 @@ export function createApp(
 
   // Favicon: Browser fragen oft direkt /favicon.ico.
   app.get("/favicon.ico", (c) =>
-    c.body(SYMBOLE["icon-192.png"], 200, {
+    c.body(SYMBOLE["logo.png"], 200, {
       "content-type": "image/png",
       "cache-control": "public, max-age=86400",
     }));

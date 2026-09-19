@@ -281,7 +281,7 @@ const seite = (body: string, script = "", o: Optionen = {}) =>
 <meta name="color-scheme" content="light dark">
 <link rel="preload" href="/schriften/dotgothic16.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="icon" type="image/png" href="/logo.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
