@@ -80,8 +80,8 @@ export function createApp(
         start_url: "/",
         scope: "/",
         display: "standalone",
-        background_color: "#fafafa",
-        theme_color: "#2d2d2d",
+        background_color: "#fcf0e4",
+        theme_color: "#fcf0e4",
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
@@ -92,7 +92,7 @@ export function createApp(
     ));
 
   app.get(
-    "/:symbol{(icon-192|icon-512|apple-touch-icon)\\.png}",
+    "/:symbol{(icon-192|icon-512|apple-touch-icon|logo)\\.png}",
     (c) =>
       c.body(SYMBOLE[c.req.param("symbol")], 200, {
         "content-type": "image/png",
