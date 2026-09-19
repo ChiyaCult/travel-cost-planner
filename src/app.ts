@@ -1,5 +1,6 @@
 import { Hono } from "@hono/hono";
 import { SYMBOLE } from "./symbole.ts";
+import { SCHRIFTEN } from "./schriften.ts";
 import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
@@ -96,6 +97,15 @@ export function createApp(
     (c) =>
       c.body(SYMBOLE[c.req.param("symbol")], 200, {
         "content-type": "image/png",
+        "cache-control": "public, max-age=86400",
+      }),
+  );
+
+  app.get(
+    "/schriften/:datei{(dotgothic16|silkscreen)\\.woff2}",
+    (c) =>
+      c.body(SCHRIFTEN[c.req.param("datei")], 200, {
+        "content-type": "font/woff2",
         "cache-control": "public, max-age=86400",
       }),
   );

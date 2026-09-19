@@ -12,6 +12,8 @@ const px = (rahmen: string, schatten?: string, versatz = 4) =>
 
 // Farben aus dem App-Symbol (Calico-Katze mit Yen): Tinte, Papier, Cyan, Rost.
 const STIL = `
+@font-face{font-family:"DotGothic16";src:url(/schriften/dotgothic16.woff2) format("woff2");font-display:swap}
+@font-face{font-family:"Silkscreen";src:url(/schriften/silkscreen.woff2) format("woff2");font-display:swap}
 :root{
   --papier:#fcf0e4;--flaeche:#fff9f1;--tinte:#0c0c48;--text-2:#4a4668;--muted:#6b6581;--linie:#d8c9ba;
   --akzent:#a8432f;--cyan:#54f0fc;--schatten:#54f0fc;--auf-tinte:#fcf0e4;
@@ -126,11 +128,21 @@ label.btn:has(input:focus-visible){outline:2px dashed var(--fokus);outline-offse
 .gruppenkarte:hover .name{text-decoration:underline;text-decoration-thickness:2px}
 .pfeil{color:var(--akzent)}
 .pfeil svg{width:1rem;height:1rem;display:block}
-.ausgabe{flex-wrap:wrap}
-.ausgabe .extras{flex-basis:100%;display:flex;gap:.25rem .5rem;flex-wrap:wrap;align-items:center;padding-left:3.25rem;margin-top:.4rem}
-.ausgabe img{height:2.75rem;width:2.75rem;object-fit:cover;display:block;box-shadow:${
+.zeile-knopf{display:flex;gap:.9rem;align-items:center;width:100%;min-height:2.75rem;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.zeile-knopf:hover strong{text-decoration:underline;text-decoration-thickness:2px}
+.leiste{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.stempel{display:flex;flex-wrap:wrap;gap:.4rem}
+.stempel .avatar{width:1.9rem;height:1.9rem;font-size:.85rem}
+.kartenkopf{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.6rem}
+.kartenkopf h2{margin:0}
+.detail-titel{font-size:1.25rem;color:var(--tinte);margin:.2rem 0 .6rem;overflow-wrap:anywhere}
+.detail-betrag{font-size:2rem;line-height:1.2;color:var(--tinte)}
+.detail-betrag small{font-size:1rem;margin-left:.5rem}
+.beleg-gross{display:block;margin:1rem 2px}
+.beleg-gross img{display:block;width:100%;max-height:45vh;object-fit:contain;background:var(--flaeche);box-shadow:${
   px("var(--tinte)")
-};margin:2px 8px 2px 2px}
+}}
+.aktionen.links{justify-content:flex-start;margin-top:1rem}
 .stand{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}
 .stand .gross{font-size:1.6rem;line-height:1.25}
 .stand small{font-size:.9rem}
@@ -267,9 +279,7 @@ const seite = (body: string, script = "", o: Optionen = {}) =>
 <meta name="theme-color" content="#fcf0e4" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0a0a2e" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light dark">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Silkscreen&display=swap">
+<link rel="preload" href="/schriften/dotgothic16.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -502,13 +512,23 @@ if (form) form.onsubmit = async (e) => {
 
 export function gruppenseite(gruppeId: number): string {
   return seite(
-    `<div role="tablist" aria-label="Bereiche der Gruppe">
+    `<div class="leiste">
+  <div class="stempel" id="stempel" role="img"></div>
+  <button class="btn sek klein" id="plus-mitglied" type="button"><span aria-hidden="true">＋</span> Mitglied</button>
+</div>
+
+<div role="tablist" aria-label="Bereiche der Gruppe">
   <button role="tab" id="tab-ausgaben" data-tab="ausgaben" aria-controls="p-ausgaben" aria-selected="true">Ausgaben</button>
   <button role="tab" id="tab-schulden" data-tab="schulden" aria-controls="p-schulden" aria-selected="false" tabindex="-1">Schulden</button>
   <button role="tab" id="tab-mitglieder" data-tab="mitglieder" aria-controls="p-mitglieder" aria-selected="false" tabindex="-1">Mitglieder</button>
 </div>
 
 <section role="tabpanel" id="p-ausgaben" aria-labelledby="tab-ausgaben">
+  <div class="karte leer" id="allein" hidden>
+    <strong>Noch allein hier</strong>
+    Füge Freunde hinzu, damit ihr Ausgaben teilen könnt.
+    <p style="margin-top:1rem"><button class="btn" id="allein-knopf" type="button"><span aria-hidden="true">＋</span> Mitglieder hinzufügen</button></p>
+  </div>
   <div id="stand"></div>
   <div id="ausgaben" aria-live="polite"><div class="skel"></div></div>
 </section>
@@ -517,12 +537,11 @@ export function gruppenseite(gruppeId: number): string {
   <div class="karte"><h2>Zahlungen</h2><div id="zahlungen"></div></div>
 </section>
 <section role="tabpanel" id="p-mitglieder" aria-labelledby="tab-mitglieder" hidden>
-  <div class="karte"><h2>Mitglieder</h2><ul class="liste" id="mitglieder"></ul></div>
-  <form class="karte" id="mitgliedform">
-    <h2>Mitglied hinzufügen</h2>
-    <div class="feld"><label for="kandidat">Person</label><select id="kandidat"></select></div>
-    <button class="btn">Hinzufügen</button>
-  </form>
+  <div class="karte">
+    <div class="kartenkopf"><h2>Mitglieder</h2>
+    <button class="btn klein" id="mitglied-neu" type="button"><span aria-hidden="true">＋</span> Hinzufügen</button></div>
+    <ul class="liste" id="mitglieder"></ul>
+  </div>
 </section>
 
 <button class="btn fab" id="fab" type="button"><span aria-hidden="true">＋</span> Ausgabe</button>
@@ -548,7 +567,21 @@ export function gruppenseite(gruppeId: number): string {
       <button class="btn">Eintragen</button>
     </div>
   </form>
-</dialog>`,
+</dialog>
+
+<dialog class="dlg" id="dlg-mitglied" aria-labelledby="dlg-mitglied-titel">
+  <form id="mitgliedform">
+    <h2 id="dlg-mitglied-titel">Mitglieder hinzufügen</h2>
+    <p id="kandidaten-leer" hidden>Alle Nutzer sind schon in dieser Gruppe. Neue Personen lädt der Admin unter „Profil“ in die App ein.</p>
+    <fieldset id="kandidaten-feld"><legend>Wer soll dazu?</legend><div class="checks" id="kandidaten"></div></fieldset>
+    <div class="aktionen">
+      <button class="btn sek" type="button" id="mitglied-abbrechen">Abbrechen</button>
+      <button class="btn" id="mitglied-ok">Hinzufügen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="dlg-detail" aria-labelledby="detail-titel"><div id="detail"></div></dialog>`,
     `const GID = ${gruppeId};
 let ich, g;
 
@@ -584,32 +617,58 @@ function mitgliederZeigen() {
     h("li", {}, avatar(m.name, m.id), h("span", { class: "text" }, h("strong", {}, m.name + (m.id === ich.id ? " (du)" : ""))))));
   $("teilnehmer").replaceChildren(...g.mitglieder.map((m) =>
     h("label", { class: "check" }, h("input", { type: "checkbox", name: "teilnehmer", value: m.id, checked: true }), m.name)));
+  $("stempel").replaceChildren(...g.mitglieder.map((m) => avatar(m.name, m.id)));
+  $("stempel").setAttribute("aria-label", "Mitglieder: " + g.mitglieder.map((m) => m.name).join(", "));
+  $("allein").hidden = g.mitglieder.length > 1;
 }
-async function kandidatenLaden() {
-  const k = await api(url("/kandidaten"));
-  const sel = $("kandidat");
-  sel.replaceChildren(...k.map((n) => new Option(n.name, n.id)));
-  $("mitgliedform").hidden = !k.length;
+// Bestehende Nutzer zur Gruppe hinzufügen (mehrere auf einmal).
+const dlgMitglied = $("dlg-mitglied");
+async function mitgliedDialog() {
+  let kandidaten;
+  try { kandidaten = await api(url("/kandidaten")); } catch (err) { meldung(err.message); return; }
+  $("kandidaten").replaceChildren(...kandidaten.map((n) =>
+    h("label", { class: "check" }, h("input", { type: "checkbox", name: "kandidat", value: n.id }), n.name)));
+  $("kandidaten-leer").hidden = kandidaten.length > 0;
+  $("kandidaten-feld").hidden = !kandidaten.length;
+  $("mitglied-ok").hidden = !kandidaten.length;
+  $("mitglied-abbrechen").textContent = kandidaten.length ? "Abbrechen" : "Schließen";
+  dlgMitglied.showModal();
 }
+for (const id of ["plus-mitglied", "mitglied-neu", "allein-knopf"]) $(id).onclick = mitgliedDialog;
+$("mitglied-abbrechen").onclick = () => dlgMitglied.close();
 $("mitgliedform").onsubmit = async (e) => {
   e.preventDefault();
-  if (!$("kandidat").value) return;
+  const ids = new FormData(e.target).getAll("kandidat").map(Number);
+  if (!ids.length) { meldung("Wähle mindestens eine Person aus."); return; }
   try {
-    await post(url("/mitglieder"), { nutzerId: Number($("kandidat").value) });
-    g = await api("/api/gruppen/" + GID);
-    mitgliederZeigen();
-    await kandidatenLaden();
-    meldung("Mitglied hinzugefügt", false);
+    for (const nutzerId of ids) await post(url("/mitglieder"), { nutzerId });
+    dlgMitglied.close();
+    meldung(ids.length === 1 ? "Mitglied hinzugefügt" : ids.length + " Mitglieder hinzugefügt", false);
   } catch (err) { meldung(err.message); }
+  try { g = await api("/api/gruppen/" + GID); mitgliederZeigen(); } catch {}
 };
+
+const betragFeld = (x) => x.waehrung === "JPY"
+  ? h("span", { class: "betrag" }, x.betragYen.toLocaleString("de-DE") + " ¥", h("small", {}, eur(x.betragCent)))
+  : h("span", { class: "betrag" }, eur(x.betragCent));
 
 function ausgabeZeile(x) {
   const meine = x.zahler.id === ich.id;
+  return h("li", {},
+    h("button", { type: "button", class: "zeile-knopf", "aria-haspopup": "dialog", onclick: () => detailZeigen(x) },
+      avatar(x.zahler.name, x.zahler.id),
+      h("span", { class: "text" }, h("strong", {}, x.beschreibung),
+        h("small", {}, (meine ? "Du" : x.zahler.name) + " · " + datumKurz(x.datum) + (x.hatBeleg ? " · Beleg" : ""))),
+      betragFeld(x)));
+}
+
+// Detailansicht: Beleg groß, Aktionen nur für den Zahler.
+const dlgDetail = $("dlg-detail");
+function detailZeigen(x) {
+  const meine = x.zahler.id === ich.id;
   const beleg = url("/ausgaben/" + x.id + "/beleg");
-  const extras = [];
-  if (x.hatBeleg) {
-    extras.push(h("a", { href: beleg, target: "_blank", "aria-label": "Beleg ansehen" }, h("img", { src: beleg, alt: "Beleg", loading: "lazy" })));
-  }
+  const fertig = () => { dlgDetail.close(); laden(); };
+  const aktionen = [];
   if (meine) {
     const inp = h("input", { type: "file", accept: "image/*", class: "versteckt", onchange: async () => {
       const datei = inp.files[0];
@@ -618,30 +677,39 @@ function ausgabeZeile(x) {
         await api(beleg, { method: "PUT", headers: { "content-type": datei.type }, body: datei });
         meldung("Beleg gespeichert", false);
       } catch (err) { meldung("Beleg nicht gespeichert: " + err.message); }
-      laden();
+      fertig();
     } });
-    extras.push(h("label", { class: "btn sek klein" }, x.hatBeleg ? "Beleg ersetzen" : "Beleg hinzufügen", inp));
+    aktionen.push(h("label", { class: "btn sek klein" }, x.hatBeleg ? "Beleg ersetzen" : "Beleg hinzufügen", inp));
     if (x.hatBeleg) {
-      extras.push(h("button", { class: "btn sek klein", type: "button", onclick: async () => {
-        try { await api(beleg, { method: "DELETE" }); } catch (err) { meldung("Beleg nicht entfernt: " + err.message); }
-        laden();
+      aktionen.push(h("button", { class: "btn sek klein", type: "button", onclick: async () => {
+        try { await api(beleg, { method: "DELETE" }); meldung("Beleg entfernt", false); }
+        catch (err) { meldung("Beleg nicht entfernt: " + err.message); }
+        fertig();
       } }, "Beleg entfernen"));
     }
-    extras.push(h("button", { class: "btn gefahr klein", type: "button", onclick: async () => {
+    aktionen.push(h("button", { class: "btn gefahr klein", type: "button", onclick: async () => {
       if (!await bestaetigen("„" + x.beschreibung + "“ löschen?")) return;
       try { await api(url("/ausgaben/" + x.id), { method: "DELETE" }); meldung("Ausgabe gelöscht", false); }
       catch (err) { meldung(err.message); }
-      laden();
+      fertig();
     } }, "Löschen"));
   }
-  return h("li", { class: "ausgabe" },
-    avatar(x.zahler.name, x.zahler.id),
-    h("span", { class: "text" }, h("strong", {}, x.beschreibung),
-      h("small", {}, (meine ? "Du" : x.zahler.name) + " · " + datumKurz(x.datum))),
-    x.waehrung === "JPY"
-      ? h("span", { class: "betrag" }, x.betragYen.toLocaleString("de-DE") + " ¥", h("small", {}, eur(x.betragCent)))
-      : h("span", { class: "betrag" }, eur(x.betragCent)),
-    extras.length ? h("div", { class: "extras" }, extras) : null);
+  const yen = x.waehrung === "JPY";
+  $("detail").replaceChildren(
+    h("h2", {}, "Ausgabe"),
+    h("p", { class: "detail-titel", id: "detail-titel" }, x.beschreibung),
+    h("div", { class: "detail-betrag" },
+      yen ? x.betragYen.toLocaleString("de-DE") + " ¥" : eur(x.betragCent),
+      yen ? h("small", {}, "= " + eur(x.betragCent)) : null),
+    yen && x.kurs ? h("small", {}, "Kurs: 1 € = " + (1 / x.kurs).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " ¥") : null,
+    h("p", {}, "Bezahlt von " + (meine ? "dir" : x.zahler.name) + " am " + datumKurz(x.datum)),
+    x.hatBeleg
+      ? h("a", { class: "beleg-gross", href: beleg, target: "_blank", "aria-label": "Beleg in voller Größe öffnen" },
+        h("img", { src: beleg, alt: "Beleg zu " + x.beschreibung }))
+      : h("p", {}, h("small", {}, "Kein Beleg")),
+    aktionen.length ? h("div", { class: "aktionen links" }, aktionen) : null,
+    h("div", { class: "aktionen" }, h("button", { class: "btn sek", type: "button", onclick: () => dlgDetail.close() }, "Schließen")));
+  dlgDetail.showModal();
 }
 
 function standZeigen(s) {
@@ -752,7 +820,6 @@ form.onsubmit = async (e) => {
   try { [ich, g] = await Promise.all([api("/api/me"), api("/api/gruppen/" + GID)]); }
   catch (e) { meldung("Gruppe nicht gefunden."); return; }
   mitgliederZeigen();
-  kandidatenLaden().catch(() => {});
   zeige(["ausgaben", "schulden", "mitglieder"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "ausgaben");
   laden();
 })();`,

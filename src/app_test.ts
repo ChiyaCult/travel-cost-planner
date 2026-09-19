@@ -946,6 +946,8 @@ Deno.test("Gruppenseite bietet Beleg hinzufügen und entfernen; Fremde werden um
   assertStringIncludes(html, "Beleg hinzufügen");
   assertStringIncludes(html, "Beleg entfernen");
   assertStringIncludes(html, 'method: "DELETE"');
+  assertStringIncludes(html, 'id="plus-mitglied"');
+  assertStringIncludes(html, 'url("/kandidaten")');
 });
 
 Deno.test("Summenvorschlag: liefert Yen aus der Erkennung, ohne Anmeldung 401", async () => {
@@ -1009,6 +1011,20 @@ Deno.test("Web-App-Manifest und Symbole sind ohne Anmeldung abrufbar", async () 
   assertStringIncludes(html, 'rel="manifest"');
   assertStringIncludes(html, 'rel="icon"');
   assertEquals((await app.request("/favicon.ico")).status, 200);
+});
+
+Deno.test("Schriften kommen vom eigenen Server, nicht von Google", async () => {
+  const { app } = frischeApp();
+  const html = await (await app.request("/")).text();
+  assertEquals(html.includes("fonts.googleapis.com"), false);
+  for (const datei of ["dotgothic16", "silkscreen"]) {
+    const r = await app.request(`/schriften/${datei}.woff2`);
+    assertEquals(r.status, 200);
+    assertEquals(r.headers.get("content-type"), "font/woff2");
+    const kopf = new Uint8Array(await r.arrayBuffer()).slice(0, 4);
+    assertEquals(new TextDecoder().decode(kopf), "wOF2");
+  }
+  assertEquals((await app.request("/schriften/fremd.woff2")).status, 404);
 });
 
 Deno.test("Eigenen Namen ändern: PATCH /api/me", async () => {
