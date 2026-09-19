@@ -140,3 +140,93 @@ Deno.test("Login ohne gültige Challenge/Passkey wird abgelehnt", async () => {
   );
   assertEquals(res.status, 400);
 });
+
+Deno.test("Gruppe anlegen: Ersteller ist Mitglied; Mitglieder in Beitrittsreihenfolge", async () => {
+  const { app, db } = frischeApp();
+  const anna = createTestSession(db, { name: "Anna" });
+  const ben = createTestSession(db, { name: "Ben" });
+  const cara = createTestSession(db, { name: "Cara" });
+  const res = await app.request(
+    "/api/gruppen",
+    json(anna.headers, { name: "Japan" }),
+  );
+  assertEquals(res.status, 201);
+  const g = await res.json();
+  assertEquals(g.mitglieder.map((m: { name: string }) => m.name), ["Anna"]);
+  for (const u of [cara, ben]) {
+    const r = await app.request(
+      `/api/gruppen/${g.id}/mitglieder`,
+      json(anna.headers, { nutzerId: u.userId }),
+    );
+    assertEquals(r.status, 201);
+  }
+  const detail =
+    await (await app.request(`/api/gruppen/${g.id}`, { headers: anna.headers }))
+      .json();
+  assertEquals(detail.mitglieder.map((m: { name: string }) => m.name), [
+    "Anna",
+    "Cara",
+    "Ben",
+  ]);
+  const pos = db.prepare(
+    "SELECT user_id FROM group_members WHERE group_id = ? ORDER BY position",
+  ).all(g.id);
+  assertEquals(pos.map((p) => p.user_id), [
+    anna.userId,
+    cara.userId,
+    ben.userId,
+  ]);
+});
+
+Deno.test("Gruppenliste zeigt nur eigene Gruppen; Nicht-Mitglied sieht nichts", async () => {
+  const { app, db } = frischeApp();
+  const anna = createTestSession(db, { name: "Anna" });
+  const ben = createTestSession(db, { name: "Ben" });
+  const g1 = await (await app.request(
+    "/api/gruppen",
+    json(anna.headers, { name: "Japan" }),
+  )).json();
+  await app.request("/api/gruppen", json(anna.headers, { name: "WG" }));
+  await app.request("/api/gruppen", json(ben.headers, { name: "Skat" }));
+  const namen = async (h: Record<string, string>) =>
+    (await (await app.request("/api/gruppen", { headers: h })).json()).map((
+      g: { name: string },
+    ) => g.name);
+  assertEquals(await namen(anna.headers), ["Japan", "WG"]);
+  assertEquals(await namen(ben.headers), ["Skat"]);
+  assertEquals(
+    (await app.request(`/api/gruppen/${g1.id}`, { headers: ben.headers }))
+      .status,
+    404,
+  );
+  assertEquals(
+    (await app.request(
+      `/api/gruppen/${g1.id}/mitglieder`,
+      json(ben.headers, { nutzerId: ben.userId }),
+    )).status,
+    404,
+  );
+  assertEquals((await app.request("/api/gruppen")).status, 401);
+});
+
+Deno.test("Mitglied hinzufügen: nur bestehende Nutzer, keine Duplikate", async () => {
+  const { app, db } = frischeApp();
+  const anna = createTestSession(db, { name: "Anna" });
+  const ben = createTestSession(db, { name: "Ben" });
+  const g = await (await app.request(
+    "/api/gruppen",
+    json(anna.headers, { name: "Japan" }),
+  )).json();
+  const add = (body: unknown) =>
+    app.request(`/api/gruppen/${g.id}/mitglieder`, json(anna.headers, body));
+  assertEquals((await add({ nutzerId: 9999 })).status, 404);
+  assertEquals((await add({ name: "Neu" })).status, 404);
+  assertEquals((await add({ nutzerId: ben.userId })).status, 201);
+  assertEquals((await add({ nutzerId: ben.userId })).status, 409);
+  assertEquals(db.prepare("SELECT COUNT(*) AS n FROM users").get(), { n: 2 });
+  assertEquals(
+    (await app.request("/api/gruppen", json(anna.headers, { name: " " })))
+      .status,
+    400,
+  );
+});

@@ -73,8 +73,44 @@ export function startseite(
   return seite(
     `<p>Angemeldet als ${
       esc(user.name)
-    }. <button id="logout">Abmelden</button></p>${admin}`,
+    }. <button id="logout">Abmelden</button></p>
+<h2>Gruppen</h2>
+<ul id="gruppen"></ul>
+<form id="neuegruppe">
+  <label>Neue Gruppe <input name="name" required></label>
+  <button>Anlegen</button>
+</form>${admin}`,
     `document.getElementById("logout").onclick = async () => { await post("/api/logout"); location.reload(); };
+async function gruppenLaden() {
+  const r = await fetch("/api/gruppen");
+  const liste = await r.json();
+  const ul = document.getElementById("gruppen");
+  ul.replaceChildren(...liste.map((g) => {
+    const li = document.createElement("li");
+    li.textContent = g.name + " (" + g.mitglieder.map((m) => m.name).join(", ") + ") ";
+    const sel = document.createElement("select");
+    sel.innerHTML = '<option value="">Mitglied hinzufügen …</option>';
+    fetch("/api/gruppen/" + g.id + "/kandidaten").then((k) => k.json()).then((k) => {
+      for (const n of k) sel.add(new Option(n.name, n.id));
+    });
+    sel.onchange = async () => {
+      if (!sel.value) return;
+      try {
+        await post("/api/gruppen/" + g.id + "/mitglieder", { nutzerId: Number(sel.value) });
+        gruppenLaden();
+      } catch (e) { meldung(e.message); }
+    };
+    li.append(sel);
+    return li;
+  }));
+}
+gruppenLaden();
+document.getElementById("neuegruppe").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try { await post("/api/gruppen", { name: f.get("name") }); e.target.reset(); gruppenLaden(); }
+  catch (err) { meldung(err.message); }
+};
 const form = document.getElementById("einladung");
 if (form) form.onsubmit = async (e) => {
   e.preventDefault();

@@ -26,6 +26,20 @@ CREATE TABLE IF NOT EXISTS invites (
   expires_at INTEGER NOT NULL,
   used_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- position (AUTOINCREMENT) hält die Beitrittsreihenfolge fest, z. B. für den Restcent.
+CREATE TABLE IF NOT EXISTS group_members (
+  position INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL REFERENCES groups(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (group_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS challenges (
   id TEXT PRIMARY KEY,
   challenge TEXT NOT NULL,
