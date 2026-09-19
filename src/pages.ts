@@ -103,10 +103,12 @@ async function gruppenLaden() {
     li.append(sel);
     const d = document.createElement("details");
     d.innerHTML = "<summary>Ausgaben</summary>" +
-      '<form><input name="betrag" inputmode="decimal" placeholder="Betrag in €" required> ' +
+      '<form><input name="betrag" inputmode="decimal" placeholder="Betrag" required> ' +
+      '<select name="waehrung"><option value="EUR">€</option><option value="JPY">¥</option></select> ' +
       '<input name="beschreibung" placeholder="Beschreibung" required> ' +
       '<input name="datum" type="date"> ' +
       '<label>Beleg <input name="beleg" type="file" accept="image/*" capture="environment"></label> ' +
+      '<span class="erkennung" role="status"></span> ' +
       '<button>Eintragen</button>' +
       '<div class="auswahl">Aufteilen auf: ' + g.mitglieder.map((m) =>
         '<label><input type="checkbox" name="teilnehmer" value="' + m.id + '" checked> ' +
@@ -167,12 +169,33 @@ async function gruppenLaden() {
         return e;
       }));
     };
+    const form = d.querySelector("form");
+    const status = form.querySelector(".erkennung");
+    form.elements.beleg.onchange = async () => {
+      const bild = form.elements.beleg.files[0];
+      status.textContent = "";
+      if (!bild) return;
+      status.textContent = "Summe wird gelesen …";
+      try {
+        const r = await fetch("/api/erkennung/summe", { method: "POST", headers: { "content-type": bild.type }, body: bild });
+        const { summeYen } = r.ok ? await r.json() : {};
+        if (summeYen && !form.elements.betrag.value) {
+          form.elements.betrag.value = summeYen;
+          form.elements.waehrung.value = "JPY";
+          status.textContent = "Vorschlag aus dem Foto – bitte prüfen.";
+        } else {
+          status.textContent = summeYen ? "" : "Keine Summe erkannt – bitte Betrag eintippen.";
+        }
+      } catch { status.textContent = "Keine Summe erkannt – bitte Betrag eintippen."; }
+    };
     d.addEventListener("toggle", () => { if (d.open) laden(); });
     d.querySelector("form").onsubmit = async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
-      const cent = Math.round(Number(String(f.get("betrag")).replace(",", ".")) * 100);
-      const body = { betragCent: cent, beschreibung: f.get("beschreibung") };
+      const zahl = Number(String(f.get("betrag")).replace(",", "."));
+      const body = { beschreibung: f.get("beschreibung") };
+      if (f.get("waehrung") === "JPY") { body.waehrung = "JPY"; body.betragYen = zahl; }
+      else body.betragCent = Math.round(zahl * 100);
       if (f.get("datum")) body.datum = f.get("datum");
       body.teilnehmerIds = f.getAll("teilnehmer").map(Number);
       const beleg = f.get("beleg");

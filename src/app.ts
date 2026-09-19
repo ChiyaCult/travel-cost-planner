@@ -2,8 +2,9 @@ import { Hono } from "@hono/hono";
 import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
-import { registerExpenseRoutes } from "./expenses.ts";
+import { BELEG_MAX, BELEG_TYPEN, registerExpenseRoutes } from "./expenses.ts";
 import { registerGroupRoutes } from "./groups.ts";
+import { erkenneSumme, tesseract, type Texterkennung } from "./erkennung.ts";
 import { frankfurter, type Kursdienst } from "./kurs.ts";
 import { anmeldeseite, startseite } from "./pages.ts";
 
@@ -28,6 +29,7 @@ export function createApp(
   db: DatabaseSync,
   config: Config,
   kursdienst: Kursdienst = frankfurter,
+  erkennung: Texterkennung = tesseract,
 ): Hono<Env> {
   const app = new Hono<Env>();
 
@@ -47,6 +49,21 @@ export function createApp(
   registerAuthRoutes(app, db, config);
   registerGroupRoutes(app, db);
   registerExpenseRoutes(app, db, kursdienst);
+
+  // Summenvorschlag für ein Foto vor dem Speichern; das Foto bleibt auf dem Server.
+  app.post("/api/erkennung/summe", async (c) => {
+    if (!c.get("user")) return c.json({ fehler: "Nicht angemeldet" }, 401);
+    const mime = (c.req.header("content-type") ?? "").split(";")[0].trim();
+    if (!BELEG_TYPEN.includes(mime)) {
+      return c.json({ fehler: "Beleg muss ein Bild sein" }, 400);
+    }
+    const bild = new Uint8Array(await c.req.arrayBuffer());
+    if (bild.length === 0) return c.json({ fehler: "Beleg ist leer" }, 400);
+    if (bild.length > BELEG_MAX) {
+      return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
+    }
+    return c.json({ summeYen: await erkenneSumme(erkennung, bild) });
+  });
 
   app.get("/", (c) => {
     const user = c.get("user");

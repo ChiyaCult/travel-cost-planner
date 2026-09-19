@@ -11,8 +11,13 @@ export function teile(betragCent: number, anzahl: number): number[] {
   return Array.from({ length: anzahl }, (_, i) => basis + (i < rest ? 1 : 0));
 }
 
-const BELEG_TYPEN = ["image/jpeg", "image/png", "image/webp", "image/heic"];
-const BELEG_MAX = 10 * 1024 * 1024;
+export const BELEG_TYPEN = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+];
+export const BELEG_MAX = 10 * 1024 * 1024;
 
 const heute = () => new Date().toISOString().slice(0, 10);
 

@@ -22,8 +22,17 @@ Der Container lauscht auf `127.0.0.1:8000`. **HTTPS** übernimmt der eigene Reve
 
 ## Daten und Backup
 
-Alle Daten liegen in **einer** SQLite-Datei: `./data/app.sqlite` (WAL-Modus, daneben ggf.
-`-wal`/`-shm`). Backup z. B. konsistent per `sqlite3 data/app.sqlite ".backup backup.sqlite"`.
+Alle Daten liegen in **einer** SQLite-Datei: `./data/app.sqlite` (WAL-Modus,
+daneben ggf. `-wal`/`-shm`). Backup z. B. konsistent per
+`sqlite3 data/app.sqlite ".backup backup.sqlite"`.
+
+## Belegerkennung
+
+Die Summe eines Belegfotos wird lokal mit Tesseract (Japanisch) gelesen; das
+Docker-Image bringt es mit. Für `deno task dev` außerhalb von Docker müssen
+`tesseract` und das Sprachpaket `jpn` installiert sein (macOS:
+`brew install tesseract tesseract-lang`). Fehlt es, bleibt das Formular normal
+nutzbar, nur ohne Vorschlag.
 
 ## Entwicklung und Tests
 

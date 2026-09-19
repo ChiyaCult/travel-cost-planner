@@ -938,3 +938,47 @@ Deno.test("Startseite (angemeldet) bietet Beleg hinzufügen und entfernen", asyn
   assertStringIncludes(html, "Beleg entfernen");
   assertStringIncludes(html, 'method: "DELETE"');
 });
+
+Deno.test("Summenvorschlag: liefert Yen aus der Erkennung, ohne Anmeldung 401", async () => {
+  const db = openDatabase(":memory:");
+  const app = createApp(
+    db,
+    {
+      domain: "ausgaben.example.de",
+      origin: "https://ausgaben.example.de",
+    },
+    fakeKurs(),
+    { lies: () => Promise.resolve("合計 ¥1,280\nお預り ¥2,000") },
+  );
+  const { headers } = createTestSession(db, { name: "Anna" });
+  const senden = (h: Record<string, string>, typ = "image/jpeg") =>
+    app.request("/api/erkennung/summe", {
+      method: "POST",
+      headers: { ...h, "content-type": typ },
+      body: new Uint8Array([1, 2, 3]),
+    });
+  assertEquals((await senden({})).status, 401);
+  assertEquals((await senden(headers, "text/plain")).status, 400);
+  assertEquals(await (await senden(headers)).json(), { summeYen: 1280 });
+});
+
+Deno.test("Summenvorschlag: Fehler der Erkennung ergibt null statt Fehlerseite", async () => {
+  const db = openDatabase(":memory:");
+  const app = createApp(
+    db,
+    {
+      domain: "ausgaben.example.de",
+      origin: "https://ausgaben.example.de",
+    },
+    fakeKurs(),
+    { lies: () => Promise.reject(new Error("Zeitlimit")) },
+  );
+  const { headers } = createTestSession(db, { name: "Anna" });
+  const res = await app.request("/api/erkennung/summe", {
+    method: "POST",
+    headers: { ...headers, "content-type": "image/jpeg" },
+    body: new Uint8Array([1]),
+  });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { summeYen: null });
+});

@@ -8,7 +8,12 @@ const IGNORIERT =
   /預り|預かり|お釣|おつり|釣銭|釣り|現金|対象|消費税|内税|外税|割引|値引|ポイント|小計/;
 
 /** Schlüsselwörter, stärkste Gruppe zuerst. */
-const SCHLUESSEL = [/お?会計|総合計|税込合計/, /合計/, /税込/];
+const SCHLUESSEL = [
+  /お?会計|総合計|税込合計/,
+  // Tesseract liest 合計 auf Thermopapier oft als 言十, 合言 oder 合主.
+  /合計|言十|合言|合[主キ十]|[謗言]計/,
+  /税込/,
+];
 
 const BETRAG =
   /([¥￥]\s*)?(\d{1,3}(?:,\d{3})+|\d+)(\s*円)?(?!\d)(\s*(?:点|個|%|％|コ))?/g;
@@ -17,6 +22,13 @@ function normalisiere(text: string): string {
   return text
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/，/g, ",")
+    // Tesseract liest das Yen-Zeichen oft als Backslash, Tausendertrenner als Punkt,
+    // Nullen als O.
+    .replace(
+      /\\+\s*([\dOo][\dOo.,]*)/g,
+      (_, z: string) =>
+        "¥" + z.replace(/[Oo]/g, "0").replace(/[.](?=\d{3}(?!\d))/g, ","),
+    )
     .replace(/[％]/g, "%");
 }
 

@@ -52,3 +52,11 @@ Deno.test("nichts Eindeutiges: null", () => {
   assertEquals(waehleSumme(""), null);
   assertEquals(waehleSumme("ありがとうございました"), null);
 });
+
+Deno.test("OCR-Fehler: Backslash als Yen, Punkt als Tausendertrenner, 言十 als 合計", () => {
+  assertEquals(
+    waehleSumme("言十                  \\831\nお預り  \\1.001"),
+    831,
+  );
+  assertEquals(waehleSumme("-合 言キ         \\10O\nお 預 り  \\\\10O"), 100);
+});
