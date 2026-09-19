@@ -1,4 +1,5 @@
 import { Hono } from "@hono/hono";
+import { SYMBOLE } from "./symbole.ts";
 import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
@@ -64,6 +65,35 @@ export function createApp(
     }
     return c.json({ summeYen: await erkenneSumme(erkennung, bild) });
   });
+
+  app.get("/manifest.webmanifest", (c) =>
+    c.body(
+      JSON.stringify({
+        name: "Ausgaben teilen",
+        short_name: "Ausgaben",
+        lang: "de",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#1e785a",
+        theme_color: "#1e785a",
+        icons: [
+          { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+        ],
+      }),
+      200,
+      { "content-type": "application/manifest+json" },
+    ));
+
+  app.get(
+    "/:symbol{(icon-192|icon-512|apple-touch-icon)\\.png}",
+    (c) =>
+      c.body(SYMBOLE[c.req.param("symbol")], 200, {
+        "content-type": "image/png",
+        "cache-control": "public, max-age=86400",
+      }),
+  );
 
   app.get("/", (c) => {
     const user = c.get("user");

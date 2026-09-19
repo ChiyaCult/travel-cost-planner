@@ -982,3 +982,20 @@ Deno.test("Summenvorschlag: Fehler der Erkennung ergibt null statt Fehlerseite",
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { summeYen: null });
 });
+
+Deno.test("Web-App-Manifest und Symbole sind ohne Anmeldung abrufbar", async () => {
+  const { app } = frischeApp();
+  const m = await app.request("/manifest.webmanifest");
+  assertEquals(m.status, 200);
+  const j = await m.json();
+  assertEquals(j.display, "standalone");
+  assertEquals(j.start_url, "/");
+  for (const i of j.icons) {
+    const r = await app.request(i.src);
+    assertEquals(r.status, 200);
+    assertEquals(r.headers.get("content-type"), "image/png");
+    await r.arrayBuffer();
+  }
+  const html = await (await app.request("/")).text();
+  assertStringIncludes(html, 'rel="manifest"');
+});
