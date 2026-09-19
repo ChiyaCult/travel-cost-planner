@@ -12,13 +12,14 @@ import type {
   AuthenticatorTransport,
   RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import { SESSION_COOKIE } from "./app.ts";
+import { SESSION_COOKIE, SITZUNG_GUELTIG_S } from "./app.ts";
 import type { Config, Env } from "./app.ts";
-import { einladungsseite, ungueltigeEinladung } from "./pages.ts";
+import { einladungsseite, mitNonce, ungueltigeEinladung } from "./pages.ts";
 
 const EINLADUNG_GUELTIG_MS = 7 * 24 * 3600 * 1000;
 const CHALLENGE_GUELTIG_MS = 5 * 60 * 1000;
-const SITZUNG_GUELTIG_S = 30 * 24 * 3600;
+/** Obergrenze offener Challenges, damit anonyme Aufrufe die DB nicht füllen. */
+export const CHALLENGES_MAX = 500;
 
 /** Legt einen Einladungslink an; für einen neuen Nutzer wird dieser mit angelegt. */
 export function createInvite(
@@ -71,6 +72,7 @@ export function registerAuthRoutes(
   config: Config,
 ) {
   const rpID = config.domain;
+  const zuVieleVersuche = { fehler: "Zu viele Versuche, bitte gleich nochmal" };
   const secure = config.origin.startsWith("https://");
 
   const findInvite = (token: string): Invite | null =>
@@ -81,11 +83,16 @@ export function registerAuthRoutes(
       )
       .get(token, Date.now()) as Invite | undefined) ?? null;
 
+  /** Speichert die Challenge; null, wenn zu viele offen sind. */
   const saveChallenge = (
     challenge: string,
     inviteToken: string | null,
-  ): string => {
+  ): string | null => {
     db.prepare("DELETE FROM challenges WHERE expires_at < ?").run(Date.now());
+    const { n } = db.prepare("SELECT COUNT(*) AS n FROM challenges").get() as {
+      n: number;
+    };
+    if (n >= CHALLENGES_MAX) return null;
     const id = crypto.randomUUID();
     db.prepare(
       "INSERT INTO challenges (id, challenge, invite_token, expires_at) VALUES (?, ?, ?, ?)",
@@ -116,6 +123,8 @@ export function registerAuthRoutes(
   };
 
   const startSession = (c: Parameters<typeof setCookie>[0], userId: number) => {
+    db.prepare("DELETE FROM sessions WHERE created_at <= datetime('now', ?)")
+      .run(`-${SITZUNG_GUELTIG_S} seconds`);
     const sessionId = crypto.randomUUID();
     db.prepare("INSERT INTO sessions (id, user_id) VALUES (?, ?)").run(
       sessionId,
@@ -177,8 +186,8 @@ export function registerAuthRoutes(
   app.get("/einladung/:token", (c) => {
     const invite = findInvite(c.req.param("token"));
     return invite
-      ? c.html(einladungsseite(invite.token, invite.name))
-      : c.html(ungueltigeEinladung(), 410);
+      ? c.html(mitNonce(einladungsseite(invite.token, invite.name), c))
+      : c.html(mitNonce(ungueltigeEinladung(), c), 410);
   });
 
   app.post("/api/einladung/:token/optionen", async (c) => {
@@ -204,10 +213,9 @@ export function registerAuthRoutes(
         userVerification: "preferred",
       },
     });
-    return c.json({
-      optionen,
-      challengeId: saveChallenge(optionen.challenge, invite.token),
-    });
+    const challengeId = saveChallenge(optionen.challenge, invite.token);
+    if (!challengeId) return c.json(zuVieleVersuche, 429);
+    return c.json({ optionen, challengeId });
   });
 
   app.post("/api/einladung/:token/registrieren", async (c) => {
@@ -270,10 +278,9 @@ export function registerAuthRoutes(
       rpID,
       userVerification: "preferred",
     });
-    return c.json({
-      optionen,
-      challengeId: saveChallenge(optionen.challenge, null),
-    });
+    const challengeId = saveChallenge(optionen.challenge, null);
+    if (!challengeId) return c.json(zuVieleVersuche, 429);
+    return c.json({ optionen, challengeId });
   });
 
   app.post("/api/login", async (c) => {

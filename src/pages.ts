@@ -4,6 +4,13 @@ const esc = (s: string) =>
     "&quot;",
   );
 
+/** Setzt den CSP-Nonce der Antwort in das Inline-Skript der Seite. */
+export const mitNonce = (
+  html: string,
+  c: { get(key: "secureHeadersNonce"): string | undefined },
+) =>
+  html.replace("<script>", `<script nonce="${c.get("secureHeadersNonce")}">`);
+
 // Pixel-Rahmen: 2px-Linie mit ausgesparten Ecken, optional mit hartem Versatzschatten.
 const px = (rahmen: string, schatten?: string, versatz = 4) =>
   `0 -2px 0 0 ${rahmen},0 2px 0 0 ${rahmen},-2px 0 0 0 ${rahmen},2px 0 0 0 ${rahmen}${
