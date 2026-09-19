@@ -6,9 +6,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY deno.json ./
 COPY src ./src
-RUN deno cache src/main.ts
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN deno cache src/main.ts && chown -R deno:deno /deno-dir
 ENV DB_PATH=/data/app.sqlite PORT=8000
 VOLUME /data
 EXPOSE 8000
-USER deno
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["deno", "run", "--allow-net", "--allow-read=/data", "--allow-write=/data", "--allow-env", "--allow-run=tesseract", "src/main.ts"]
