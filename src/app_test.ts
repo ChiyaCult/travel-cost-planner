@@ -460,3 +460,95 @@ Deno.test("Ungültige Auswahl wird abgelehnt", async () => {
     assertEquals(r.status, 400);
   }
 });
+
+const aendern = (
+  app: ReturnType<typeof frischeApp>["app"],
+  id: number,
+  ausgabeId: number,
+  headers: Record<string, string>,
+  body: unknown,
+) =>
+  app.request(`/api/gruppen/${id}/ausgaben/${ausgabeId}`, {
+    method: "PUT",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+Deno.test("Zahler ändert Ausgabe: Schulden werden neu berechnet", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben, cem] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+    "Cem",
+  ]);
+  const { id: aid } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 3000,
+    beschreibung: "Essen",
+  })).json();
+  const r = await aendern(app, id, aid, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Kaffee",
+    datum: "2026-01-02",
+    teilnehmerIds: [anna.userId, cem.userId],
+  });
+  assertEquals(r.status, 200);
+  assertEquals((await r.json()).beschreibung, "Kaffee");
+  assertEquals(await schulden(app, id, ben.headers), [["Cem", "Anna", 500]]);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: anna.headers,
+  })).json();
+  assertEquals(liste.length, 1);
+  assertEquals(liste[0].datum, "2026-01-02");
+  assertEquals(
+    (await aendern(app, id, aid, anna.headers, {
+      betragCent: 0,
+      beschreibung: "x",
+    }))
+      .status,
+    400,
+  );
+});
+
+Deno.test("Nur der Zahler darf ändern oder löschen", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const fremd = createTestSession(db, { name: "Fremd" });
+  const { id: aid } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 2000,
+    beschreibung: "A",
+  })).json();
+  const neu = { betragCent: 1, beschreibung: "B" };
+  assertEquals((await aendern(app, id, aid, ben.headers, neu)).status, 403);
+  const del = (headers: Record<string, string>) =>
+    app.request(`/api/gruppen/${id}/ausgaben/${aid}`, {
+      method: "DELETE",
+      headers,
+    });
+  assertEquals((await del(ben.headers)).status, 403);
+  assertEquals((await aendern(app, id, aid, fremd.headers, neu)).status, 404);
+  assertEquals((await del(fremd.headers)).status, 404);
+  assertEquals(await schulden(app, id, anna.headers), [["Ben", "Anna", 1000]]);
+});
+
+Deno.test("Zahler löscht Ausgabe: Schulden verschwinden", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const { id: aid } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 2000,
+    beschreibung: "A",
+  })).json();
+  const del = () =>
+    app.request(`/api/gruppen/${id}/ausgaben/${aid}`, {
+      method: "DELETE",
+      headers: anna.headers,
+    });
+  assertEquals((await del()).status, 204);
+  assertEquals(await schulden(app, id, ben.headers), []);
+  assertEquals((await del()).status, 404);
+});

@@ -1,4 +1,4 @@
-import type { Hono } from "@hono/hono";
+import type { Context, Hono } from "@hono/hono";
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
 import { istMitglied, mitglieder } from "./groups.ts";
@@ -21,10 +21,16 @@ function gueltigesDatum(d: string): boolean {
 export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
   const nichtGefunden = { fehler: "Gruppe nicht gefunden" };
 
-  app.post("/api/gruppen/:id/ausgaben", async (c) => {
-    const user = c.get("user")!;
-    const gruppeId = Number(c.req.param("id"));
-    if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
+  /** Prüft Betrag, Beschreibung, Datum und Auswahl; gemeinsam für Anlegen und Ändern. */
+  async function pruefeEingabe(c: Context<Env>, gruppeId: number): Promise<
+    | { fehler: { fehler: string } }
+    | {
+      betragCent: number;
+      beschreibung: string;
+      datum: string;
+      betroffene: { id: number }[];
+    }
+  > {
     const body = await c.req.json().catch(() => ({})) as {
       betragCent?: unknown;
       beschreibung?: unknown;
@@ -36,17 +42,16 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       typeof betragCent !== "number" || !Number.isSafeInteger(betragCent) ||
       betragCent <= 0
     ) {
-      return c.json({ fehler: "Betrag ungültig" }, 400);
+      return { fehler: { fehler: "Betrag ungültig" } };
     }
     const beschreibung = typeof body.beschreibung === "string"
       ? body.beschreibung.trim()
       : "";
-    if (!beschreibung) return c.json({ fehler: "Beschreibung fehlt" }, 400);
+    if (!beschreibung) return { fehler: { fehler: "Beschreibung fehlt" } };
     const datum = body.datum === undefined ? heute() : body.datum;
     if (typeof datum !== "string" || !gueltigesDatum(datum)) {
-      return c.json({ fehler: "Datum ungültig" }, 400);
+      return { fehler: { fehler: "Datum ungültig" } };
     }
-
     const alle = mitglieder(db, gruppeId);
     // Standard alle; sonst die gewählten Mitglieder in Beitrittsreihenfolge.
     let betroffene = alle;
@@ -57,10 +62,20 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
         new Set(ids).size !== ids.length ||
         !ids.every((i) => alle.some((m) => m.id === i))
       ) {
-        return c.json({ fehler: "Auswahl ungültig" }, 400);
+        return { fehler: { fehler: "Auswahl ungültig" } };
       }
       betroffene = alle.filter((m) => ids.includes(m.id));
     }
+    return { betragCent, beschreibung, datum, betroffene };
+  }
+
+  app.post("/api/gruppen/:id/ausgaben", async (c) => {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
+    const eingabe = await pruefeEingabe(c, gruppeId);
+    if ("fehler" in eingabe) return c.json(eingabe.fehler, 400);
+    const { betragCent, beschreibung, datum, betroffene } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
@@ -87,6 +102,83 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       db.exec("ROLLBACK");
       throw e;
     }
+  });
+
+  /** Lädt die Ausgabe für Ändern/Löschen: 404 für Fremde, 403 für Nicht-Zahler. */
+  function eigeneAusgabe(c: Context<Env>) {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) {
+      return { antwort: c.json(nichtGefunden, 404) };
+    }
+    const zeile = db
+      .prepare("SELECT payer_id FROM expenses WHERE id = ? AND group_id = ?")
+      .get(Number(c.req.param("ausgabeId")), gruppeId) as
+        | { payer_id: number }
+        | undefined;
+    if (!zeile) {
+      return { antwort: c.json({ fehler: "Ausgabe nicht gefunden" }, 404) };
+    }
+    if (zeile.payer_id !== user.id) {
+      return {
+        antwort: c.json(
+          { fehler: "Nur der Zahler darf die Ausgabe ändern" },
+          403,
+        ),
+      };
+    }
+    return {
+      antwort: undefined,
+      gruppeId,
+      id: Number(c.req.param("ausgabeId")),
+      user,
+    };
+  }
+
+  app.put("/api/gruppen/:id/ausgaben/:ausgabeId", async (c) => {
+    const r = eigeneAusgabe(c);
+    if (r.antwort) return r.antwort;
+    const eingabe = await pruefeEingabe(c, r.gruppeId);
+    if ("fehler" in eingabe) return c.json(eingabe.fehler, 400);
+    const { betragCent, beschreibung, datum, betroffene } = eingabe;
+    const anteile = teile(betragCent, betroffene.length);
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        "UPDATE expenses SET amount_cents = ?, description = ?, date = ? WHERE id = ?",
+      ).run(betragCent, beschreibung, datum, r.id);
+      db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
+      const ins = db.prepare(
+        "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
+      );
+      betroffene.forEach((m, i) => ins.run(r.id, m.id, anteile[i]));
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    return c.json({
+      id: r.id,
+      zahler: { id: r.user.id, name: r.user.name },
+      betragCent,
+      beschreibung,
+      datum,
+    });
+  });
+
+  app.delete("/api/gruppen/:id/ausgaben/:ausgabeId", (c) => {
+    const r = eigeneAusgabe(c);
+    if (r.antwort) return r.antwort;
+    db.exec("BEGIN");
+    try {
+      db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
+      db.prepare("DELETE FROM expenses WHERE id = ?").run(r.id);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    return c.body(null, 204);
   });
 
   app.get("/api/gruppen/:id/ausgaben", (c) => {
