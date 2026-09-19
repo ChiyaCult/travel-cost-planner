@@ -14,6 +14,9 @@ export function createTestSession(
     .run(opts.name ?? "Testnutzer", opts.isAdmin ? 1 : 0);
   const userId = Number(lastInsertRowid);
   const sessionId = crypto.randomUUID();
-  db.prepare("INSERT INTO sessions (id, user_id) VALUES (?, ?)").run(sessionId, userId);
+  db.prepare("INSERT INTO sessions (id, user_id) VALUES (?, ?)").run(
+    sessionId,
+    userId,
+  );
   return { userId, headers: { Cookie: `${SESSION_COOKIE}=${sessionId}` } };
 }

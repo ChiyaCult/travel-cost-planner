@@ -1,12 +1,16 @@
 import { Hono } from "@hono/hono";
 import { getCookie } from "@hono/hono/cookie";
 import type { DatabaseSync } from "node:sqlite";
+import { registerAuthRoutes } from "./auth.ts";
+import { anmeldeseite, startseite } from "./pages.ts";
 
 export const SESSION_COOKIE = "session";
 
 export interface Config {
   /** Feste Domain; Passkeys sind an sie gebunden. */
   domain: string;
+  /** Vollständiger Ursprung (z. B. https://ausgaben.example.de); WebAuthn prüft ihn. */
+  origin: string;
 }
 
 export interface SessionUser {
@@ -15,21 +19,7 @@ export interface SessionUser {
   is_admin: number;
 }
 
-type Env = { Variables: { user: SessionUser | null } };
-
-const startseite = (domain: string) => `<!doctype html>
-<html lang="de">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ausgaben teilen</title>
-</head>
-<body>
-<h1>Ausgaben teilen</h1>
-<p>Willkommen! Diese App teilt Ausgaben im Freundeskreis.</p>
-<p><small>${domain}</small></p>
-</body>
-</html>`;
+export type Env = { Variables: { user: SessionUser | null } };
 
 export function createApp(db: DatabaseSync, config: Config): Hono<Env> {
   const app = new Hono<Env>();
@@ -47,14 +37,30 @@ export function createApp(db: DatabaseSync, config: Config): Hono<Env> {
     await next();
   });
 
-  app.get("/", (c) => c.html(startseite(config.domain)));
+  registerAuthRoutes(app, db, config);
+
+  app.get("/", (c) => {
+    const user = c.get("user");
+    if (!user) return c.html(anmeldeseite(config.domain));
+    const nutzer = user.is_admin === 1
+      ? db.prepare("SELECT id, name FROM users ORDER BY name").all() as {
+        id: number;
+        name: string;
+      }[]
+      : [];
+    return c.html(startseite(user, nutzer));
+  });
 
   app.get("/api/health", (c) => c.json({ ok: true }));
 
   app.get("/api/me", (c) => {
     const user = c.get("user");
     if (!user) return c.json({ fehler: "Nicht angemeldet" }, 401);
-    return c.json({ id: user.id, name: user.name, istAdmin: user.is_admin === 1 });
+    return c.json({
+      id: user.id,
+      name: user.name,
+      istAdmin: user.is_admin === 1,
+    });
   });
 
   return app;

@@ -12,6 +12,26 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS credentials (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  public_key BLOB NOT NULL,
+  counter INTEGER NOT NULL,
+  transports TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS invites (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS challenges (
+  id TEXT PRIMARY KEY,
+  challenge TEXT NOT NULL,
+  invite_token TEXT,
+  expires_at INTEGER NOT NULL
+);
 `;
 
 /** Öffnet die einzige SQLite-Datei der App (":memory:" für Tests) und legt das Schema an. */

@@ -1,0 +1,116 @@
+const esc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(
+    /"/g,
+    "&quot;",
+  );
+
+const seite = (body: string, script = "") =>
+  `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ausgaben teilen</title>
+</head>
+<body>
+<h1>Ausgaben teilen</h1>
+${body}
+<p id="meldung" role="alert"></p>
+<script>
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.fehler || "Fehler");
+  return j;
+}
+function meldung(text) { document.getElementById("meldung").textContent = text; }
+${script}
+</script>
+</body>
+</html>`;
+
+export function anmeldeseite(domain: string): string {
+  return seite(
+    `<p>Willkommen! Diese App teilt Ausgaben im Freundeskreis.</p>
+<button id="login">Mit Passkey anmelden</button>
+<p><small>${esc(domain)}</small></p>`,
+    `document.getElementById("login").onclick = async () => {
+  try {
+    const { optionen, challengeId } = await post("/api/login/optionen");
+    const antwort = await navigator.credentials.get({
+      publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(optionen),
+    });
+    await post("/api/login", { challengeId, antwort: antwort.toJSON() });
+    location.reload();
+  } catch (e) { meldung("Anmeldung fehlgeschlagen: " + e.message); }
+};`,
+  );
+}
+
+export function startseite(
+  user: { name: string; is_admin: number },
+  nutzer: { id: number; name: string }[],
+): string {
+  const admin = user.is_admin === 1
+    ? `<h2>Einladen</h2>
+<form id="einladung">
+  <label>Neuer Nutzer (Name) <input name="name"></label>
+  <label>oder neues Gerät für
+    <select name="nutzerId"><option value="">–</option>${
+      nutzer.map((n) => `<option value="${n.id}">${esc(n.name)}</option>`).join(
+        "",
+      )
+    }</select>
+  </label>
+  <button>Einladungslink erzeugen</button>
+</form>
+<p id="link"></p>`
+    : "";
+  return seite(
+    `<p>Angemeldet als ${
+      esc(user.name)
+    }. <button id="logout">Abmelden</button></p>${admin}`,
+    `document.getElementById("logout").onclick = async () => { await post("/api/logout"); location.reload(); };
+const form = document.getElementById("einladung");
+if (form) form.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(form);
+  try {
+    const body = f.get("nutzerId") ? { nutzerId: Number(f.get("nutzerId")) } : { name: f.get("name") };
+    const { url } = await post("/api/einladungen", body);
+    document.getElementById("link").textContent = url;
+  } catch (err) { meldung(err.message); }
+};`,
+  );
+}
+
+export function einladungsseite(token: string, name: string): string {
+  return seite(
+    `<p>Hallo ${esc(name)}! Registriere einen Passkey, um die App zu nutzen.</p>
+<button id="reg">Passkey registrieren</button>`,
+    `document.getElementById("reg").onclick = async () => {
+  try {
+    const { optionen, challengeId } = await post("/api/einladung/${
+      encodeURIComponent(token)
+    }/optionen");
+    const antwort = await navigator.credentials.create({
+      publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(optionen),
+    });
+    await post("/api/einladung/${
+      encodeURIComponent(token)
+    }/registrieren", { challengeId, antwort: antwort.toJSON() });
+    location.href = "/";
+  } catch (e) { meldung("Registrierung fehlgeschlagen: " + e.message); }
+};`,
+  );
+}
+
+export function ungueltigeEinladung(): string {
+  return seite(
+    `<p>Dieser Einladungslink ist ungültig oder wurde bereits verwendet. Bitte den Admin um einen neuen.</p>`,
+  );
+}

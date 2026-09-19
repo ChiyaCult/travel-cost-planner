@@ -34,3 +34,12 @@ deno task test
 
 Tests rufen die HTTP-API (`app.request`) gegen eine frische In-Memory-Datenbank auf und melden
 sich mit `createTestSession` ([src/testing.ts](src/testing.ts)) ohne echten Passkey an.
+
+## Einladung und Anmeldung
+
+Beim ersten Start ohne Admin legt die App einen an (Name aus `ADMIN_NAME`, Standard „Admin“)
+und schreibt den Einladungslink ins Log (`docker compose logs`). Über diesen Link registriert der
+Admin seinen Passkey. Danach erzeugt nur der Admin auf der Startseite weitere Einladungslinks
+(7 Tage gültig, einmal verwendbar). Verliert jemand sein Gerät, erzeugt der Admin einen neuen
+Link für den bestehenden Nutzer; er registriert damit einen zusätzlichen Passkey.
+Lokal mit `APP_DOMAIN=localhost` läuft alles über `http://localhost:8000`.
