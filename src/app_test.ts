@@ -230,3 +230,134 @@ Deno.test("Mitglied hinzufügen: nur bestehende Nutzer, keine Duplikate", async 
     400,
   );
 });
+
+async function gruppeMit(
+  app: ReturnType<typeof frischeApp>["app"],
+  db: ReturnType<typeof frischeApp>["db"],
+  namen: string[],
+) {
+  const sessions = namen.map((name) => createTestSession(db, { name }));
+  const res = await app.request(
+    "/api/gruppen",
+    json(sessions[0].headers, { name: "Reise" }),
+  );
+  const { id } = await res.json();
+  for (const s of sessions.slice(1)) {
+    await app.request(
+      `/api/gruppen/${id}/mitglieder`,
+      json(sessions[0].headers, { nutzerId: s.userId }),
+    );
+  }
+  return { id: id as number, sessions };
+}
+
+const ausgabe = (
+  app: ReturnType<typeof frischeApp>["app"],
+  id: number,
+  headers: Record<string, string>,
+  body: unknown,
+) => app.request(`/api/gruppen/${id}/ausgaben`, json(headers, body));
+
+const schulden = async (
+  app: ReturnType<typeof frischeApp>["app"],
+  id: number,
+  headers: Record<string, string>,
+) =>
+  (await (await app.request(`/api/gruppen/${id}/schulden`, { headers })).json())
+    .map((
+      s: { von: { name: string }; an: { name: string }; betragCent: number },
+    ) => [s.von.name, s.an.name, s.betragCent]);
+
+Deno.test("Ausgabe zu zweit: Zahler zählt mit, Gegenüber schuldet die Hälfte", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const res = await ausgabe(app, id, anna.headers, {
+    betragCent: 1001,
+    beschreibung: "Essen",
+    datum: "2026-05-01",
+  });
+  assertEquals(res.status, 201);
+  // 1001 / 2: Restcent an das erste Mitglied (Anna, Zahlerin) – Ben schuldet 500.
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 500]]);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste.length, 1);
+  assertEquals(liste[0].zahler.name, "Anna");
+  assertEquals(liste[0].betragCent, 1001);
+  assertEquals(liste[0].datum, "2026-05-01");
+  assertEquals(liste[0].beschreibung, "Essen");
+});
+
+Deno.test("Ausgabe zu dritt: 1000 Cent, Restcent in Beitrittsreihenfolge", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben, cem] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+    "Cem",
+  ]);
+  await ausgabe(app, id, cem.headers, {
+    betragCent: 1000,
+    beschreibung: "Taxi",
+  });
+  // Anteile: Anna 334, Ben 333, Cem 333 (Zahler).
+  assertEquals(await schulden(app, id, anna.headers), [
+    ["Anna", "Cem", 334],
+    ["Ben", "Cem", 333],
+  ]);
+  const summe = db.prepare("SELECT SUM(share_cents) AS s FROM expense_shares")
+    .get();
+  assertEquals(summe, { s: 1000 });
+});
+
+Deno.test("Schulden in beide Richtungen werden verrechnet", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  await ausgabe(app, id, anna.headers, { betragCent: 2000, beschreibung: "A" });
+  await ausgabe(app, id, ben.headers, { betragCent: 600, beschreibung: "B" });
+  assertEquals(await schulden(app, id, anna.headers), [["Ben", "Anna", 700]]);
+  await ausgabe(app, id, ben.headers, { betragCent: 1400, beschreibung: "C" });
+  assertEquals(await schulden(app, id, anna.headers), []);
+});
+
+Deno.test("Ausgabe: Standarddatum heute, Validierung, Nicht-Mitglied 404", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna"]);
+  const res = await ausgabe(app, id, anna.headers, {
+    betragCent: 500,
+    beschreibung: "Kaffee",
+  });
+  assertEquals((await res.json()).datum, new Date().toISOString().slice(0, 10));
+  for (
+    const kaputt of [
+      { betragCent: 0, beschreibung: "x" },
+      { betragCent: 1.5, beschreibung: "x" },
+      { betragCent: "5", beschreibung: "x" },
+      { betragCent: 5, beschreibung: " " },
+      { betragCent: 5, beschreibung: "x", datum: "2026-02-30" },
+    ]
+  ) {
+    assertEquals((await ausgabe(app, id, anna.headers, kaputt)).status, 400);
+  }
+  const fremd = createTestSession(db, { name: "Fremd" });
+  assertEquals(
+    (await ausgabe(app, id, fremd.headers, {
+      betragCent: 5,
+      beschreibung: "x",
+    }))
+      .status,
+    404,
+  );
+  for (const pfad of ["ausgaben", "schulden"]) {
+    const r = await app.request(`/api/gruppen/${id}/${pfad}`, {
+      headers: fremd.headers,
+    });
+    assertEquals(r.status, 404);
+  }
+});

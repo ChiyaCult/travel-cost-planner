@@ -40,6 +40,22 @@ CREATE TABLE IF NOT EXISTS group_members (
   joined_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (group_id, user_id)
 );
+-- Beträge sind ganze Cent. Anteile werden beim Eintragen festgeschrieben.
+CREATE TABLE IF NOT EXISTS expenses (
+  id INTEGER PRIMARY KEY,
+  group_id INTEGER NOT NULL REFERENCES groups(id),
+  payer_id INTEGER NOT NULL REFERENCES users(id),
+  amount_cents INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  date TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS expense_shares (
+  expense_id INTEGER NOT NULL REFERENCES expenses(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  share_cents INTEGER NOT NULL,
+  PRIMARY KEY (expense_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS challenges (
   id TEXT PRIMARY KEY,
   challenge TEXT NOT NULL,

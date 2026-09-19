@@ -2,12 +2,12 @@ import type { Hono } from "@hono/hono";
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
 
-interface Mitglied {
+export interface Mitglied {
   id: number;
   name: string;
 }
 
-function mitglieder(db: DatabaseSync, gruppeId: number): Mitglied[] {
+export function mitglieder(db: DatabaseSync, gruppeId: number): Mitglied[] {
   return db
     .prepare(
       `SELECT u.id, u.name FROM group_members m JOIN users u ON u.id = m.user_id
@@ -16,7 +16,11 @@ function mitglieder(db: DatabaseSync, gruppeId: number): Mitglied[] {
     .all(gruppeId) as unknown as Mitglied[];
 }
 
-const istMitglied = (db: DatabaseSync, gruppeId: number, userId: number) =>
+export const istMitglied = (
+  db: DatabaseSync,
+  gruppeId: number,
+  userId: number,
+) =>
   !!db
     .prepare("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?")
     .get(gruppeId, userId);
