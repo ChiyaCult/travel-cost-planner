@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN in .env setzen}
+    ports:
+      - "127.0.0.1:8000:8000" # nur lokal; HTTPS macht der Reverse-Proxy
+    volumes:
+      - ./data:/data
