@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
 import { registerExpenseRoutes } from "./expenses.ts";
 import { registerGroupRoutes } from "./groups.ts";
+import { frankfurter, type Kursdienst } from "./kurs.ts";
 import { anmeldeseite, startseite } from "./pages.ts";
 
 export const SESSION_COOKIE = "session";
@@ -23,7 +24,11 @@ export interface SessionUser {
 
 export type Env = { Variables: { user: SessionUser | null } };
 
-export function createApp(db: DatabaseSync, config: Config): Hono<Env> {
+export function createApp(
+  db: DatabaseSync,
+  config: Config,
+  kursdienst: Kursdienst = frankfurter,
+): Hono<Env> {
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -41,7 +46,7 @@ export function createApp(db: DatabaseSync, config: Config): Hono<Env> {
 
   registerAuthRoutes(app, db, config);
   registerGroupRoutes(app, db);
-  registerExpenseRoutes(app, db);
+  registerExpenseRoutes(app, db, kursdienst);
 
   app.get("/", (c) => {
     const user = c.get("user");

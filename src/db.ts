@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   description TEXT NOT NULL,
   date TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  -- Yen-Ausgaben: original_yen und exchange_rate (Euro pro Yen) sind fest; amount_cents ist immer Euro.
 );
 CREATE TABLE IF NOT EXISTS expense_shares (
   expense_id INTEGER NOT NULL REFERENCES expenses(id),
@@ -79,5 +80,14 @@ export function openDatabase(path: string): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  const spalten = db.prepare("PRAGMA table_info(expenses)")
+    .all() as unknown as {
+      name: string;
+    }[];
+  if (!spalten.some((s) => s.name === "exchange_rate")) {
+    db.exec(
+      "ALTER TABLE expenses ADD COLUMN original_yen INTEGER; ALTER TABLE expenses ADD COLUMN exchange_rate REAL;",
+    );
+  }
   return db;
 }

@@ -1,6 +1,7 @@
 import type { Context, Hono } from "@hono/hono";
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
+import type { Kursdienst } from "./kurs.ts";
 import { istMitglied, mitglieder } from "./groups.ts";
 
 /** Gleichmäßig in ganzen Cent; der Restcent geht einzeln an die ersten Mitglieder. */
@@ -18,14 +19,24 @@ function gueltigesDatum(d: string): boolean {
   return !isNaN(t.getTime()) && t.toISOString().startsWith(d);
 }
 
-export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
+export function registerExpenseRoutes(
+  app: Hono<Env>,
+  db: DatabaseSync,
+  kursdienst: Kursdienst,
+) {
   const nichtGefunden = { fehler: "Gruppe nicht gefunden" };
 
   /** Prüft Betrag, Beschreibung, Datum und Auswahl; gemeinsam für Anlegen und Ändern. */
-  async function pruefeEingabe(c: Context<Env>, gruppeId: number): Promise<
-    | { fehler: { fehler: string } }
+  async function pruefeEingabe(
+    c: Context<Env>,
+    gruppeId: number,
+    bisherKurs: number | null = null,
+  ): Promise<
+    | { fehler: { fehler: string }; status?: 400 | 502 }
     | {
       betragCent: number;
+      yen: number | null;
+      kurs: number | null;
       beschreibung: string;
       datum: string;
       betroffene: { id: number }[];
@@ -33,17 +44,19 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
   > {
     const body = await c.req.json().catch(() => ({})) as {
       betragCent?: unknown;
+      betragYen?: unknown;
+      waehrung?: unknown;
+      kurs?: unknown;
       beschreibung?: unknown;
       datum?: unknown;
       teilnehmerIds?: unknown;
     };
-    const { betragCent } = body;
-    if (
-      typeof betragCent !== "number" || !Number.isSafeInteger(betragCent) ||
-      betragCent <= 0
-    ) {
-      return { fehler: { fehler: "Betrag ungültig" } };
+    const waehrung = body.waehrung ?? "EUR";
+    if (waehrung !== "EUR" && waehrung !== "JPY") {
+      return { fehler: { fehler: "Währung ungültig" } };
     }
+    const ganzePositive = (n: unknown): n is number =>
+      typeof n === "number" && Number.isSafeInteger(n) && n > 0;
     const beschreibung = typeof body.beschreibung === "string"
       ? body.beschreibung.trim()
       : "";
@@ -51,6 +64,45 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
     const datum = body.datum === undefined ? heute() : body.datum;
     if (typeof datum !== "string" || !gueltigesDatum(datum)) {
       return { fehler: { fehler: "Datum ungültig" } };
+    }
+    let betragCent: number;
+    let yen: number | null = null;
+    let kurs: number | null = null;
+    if (waehrung === "EUR") {
+      if (!ganzePositive(body.betragCent)) {
+        return { fehler: { fehler: "Betrag ungültig" } };
+      }
+      betragCent = body.betragCent;
+    } else {
+      if (!ganzePositive(body.betragYen)) {
+        return { fehler: { fehler: "Betrag ungültig" } };
+      }
+      yen = body.betragYen;
+      if (body.kurs !== undefined) {
+        if (
+          typeof body.kurs !== "number" || !Number.isFinite(body.kurs) ||
+          body.kurs <= 0
+        ) {
+          return { fehler: { fehler: "Kurs ungültig" } };
+        }
+        kurs = body.kurs;
+      } else if (bisherKurs !== null) {
+        kurs = bisherKurs; // gespeicherter Kurs bleibt beim Ändern fix
+      } else {
+        try {
+          kurs = await kursdienst.yenInEuro(datum);
+        } catch {
+          return {
+            fehler: {
+              fehler: "Kurs nicht abrufbar; bitte Kurs manuell angeben",
+            },
+            status: 502,
+          };
+        }
+      }
+      // Erst der Gesamtbetrag in Euro-Cent gerundet, dann in Cent geteilt.
+      betragCent = Math.round(yen * kurs * 100);
+      if (betragCent <= 0) return { fehler: { fehler: "Betrag ungültig" } };
     }
     const alle = mitglieder(db, gruppeId);
     // Standard alle; sonst die gewählten Mitglieder in Beitrittsreihenfolge.
@@ -66,25 +118,32 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       }
       betroffene = alle.filter((m) => ids.includes(m.id));
     }
-    return { betragCent, beschreibung, datum, betroffene };
+    return { betragCent, yen, kurs, beschreibung, datum, betroffene };
   }
+
+  const waehrungsfelder = (yen: number | null, kurs: number | null) =>
+    yen === null
+      ? { waehrung: "EUR" }
+      : { waehrung: "JPY", betragYen: yen, kurs };
 
   app.post("/api/gruppen/:id/ausgaben", async (c) => {
     const user = c.get("user")!;
     const gruppeId = Number(c.req.param("id"));
     if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
     const eingabe = await pruefeEingabe(c, gruppeId);
-    if ("fehler" in eingabe) return c.json(eingabe.fehler, 400);
-    const { betragCent, beschreibung, datum, betroffene } = eingabe;
+    if ("fehler" in eingabe) {
+      return c.json(eingabe.fehler, eingabe.status ?? 400);
+    }
+    const { betragCent, yen, kurs, beschreibung, datum, betroffene } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
       const { lastInsertRowid } = db
         .prepare(
-          `INSERT INTO expenses (group_id, payer_id, amount_cents, description, date)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO expenses (group_id, payer_id, amount_cents, description, date, original_yen, exchange_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(gruppeId, user.id, betragCent, beschreibung, datum);
+        .run(gruppeId, user.id, betragCent, beschreibung, datum, yen, kurs);
       const id = Number(lastInsertRowid);
       const ins = db.prepare(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
@@ -95,6 +154,7 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
         id,
         zahler: { id: user.id, name: user.name },
         betragCent,
+        ...waehrungsfelder(yen, kurs),
         beschreibung,
         datum,
       }, 201);
@@ -112,9 +172,11 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       return { antwort: c.json(nichtGefunden, 404) };
     }
     const zeile = db
-      .prepare("SELECT payer_id FROM expenses WHERE id = ? AND group_id = ?")
+      .prepare(
+        "SELECT payer_id, exchange_rate FROM expenses WHERE id = ? AND group_id = ?",
+      )
       .get(Number(c.req.param("ausgabeId")), gruppeId) as
-        | { payer_id: number }
+        | { payer_id: number; exchange_rate: number | null }
         | undefined;
     if (!zeile) {
       return { antwort: c.json({ fehler: "Ausgabe nicht gefunden" }, 404) };
@@ -132,21 +194,24 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       gruppeId,
       id: Number(c.req.param("ausgabeId")),
       user,
+      bisherKurs: zeile.exchange_rate,
     };
   }
 
   app.put("/api/gruppen/:id/ausgaben/:ausgabeId", async (c) => {
     const r = eigeneAusgabe(c);
     if (r.antwort) return r.antwort;
-    const eingabe = await pruefeEingabe(c, r.gruppeId);
-    if ("fehler" in eingabe) return c.json(eingabe.fehler, 400);
-    const { betragCent, beschreibung, datum, betroffene } = eingabe;
+    const eingabe = await pruefeEingabe(c, r.gruppeId, r.bisherKurs);
+    if ("fehler" in eingabe) {
+      return c.json(eingabe.fehler, eingabe.status ?? 400);
+    }
+    const { betragCent, yen, kurs, beschreibung, datum, betroffene } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
       db.prepare(
-        "UPDATE expenses SET amount_cents = ?, description = ?, date = ? WHERE id = ?",
-      ).run(betragCent, beschreibung, datum, r.id);
+        "UPDATE expenses SET amount_cents = ?, description = ?, date = ?, original_yen = ?, exchange_rate = ? WHERE id = ?",
+      ).run(betragCent, beschreibung, datum, yen, kurs, r.id);
       db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
       const ins = db.prepare(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
@@ -161,6 +226,7 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       id: r.id,
       zahler: { id: r.user.id, name: r.user.name },
       betragCent,
+      ...waehrungsfelder(yen, kurs),
       beschreibung,
       datum,
     });
@@ -188,7 +254,8 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
     const zeilen = db
       .prepare(
         `SELECT e.id, e.amount_cents AS betragCent, e.description AS beschreibung,
-                e.date AS datum, u.id AS zahlerId, u.name AS zahlerName
+                e.date AS datum, e.original_yen AS yen, e.exchange_rate AS kurs,
+                u.id AS zahlerId, u.name AS zahlerName
          FROM expenses e JOIN users u ON u.id = e.payer_id
          WHERE e.group_id = ? ORDER BY e.date DESC, e.id DESC`,
       )
@@ -197,13 +264,18 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
         betragCent: number;
         beschreibung: string;
         datum: string;
+        yen: number | null;
+        kurs: number | null;
         zahlerId: number;
         zahlerName: string;
       }[];
-    return c.json(zeilen.map(({ zahlerId, zahlerName, ...rest }) => ({
-      ...rest,
-      zahler: { id: zahlerId, name: zahlerName },
-    })));
+    return c.json(
+      zeilen.map(({ zahlerId, zahlerName, yen, kurs, ...rest }) => ({
+        ...rest,
+        ...waehrungsfelder(yen, kurs),
+        zahler: { id: zahlerId, name: zahlerName },
+      })),
+    );
   });
 
   // Je Paar nur eine Schuld: Ausgaben in beide Richtungen werden verrechnet.

@@ -3,14 +3,31 @@ import { createApp } from "./app.ts";
 import { openDatabase } from "./db.ts";
 import { createTestSession } from "./testing.ts";
 
-function frischeApp() {
+/** Fake-Kursdienst: Kurs pro Datum steuerbar, zählt Abrufe. */
+function fakeKurs(kurse: Record<string, number> = {}) {
+  const dienst = {
+    abrufe: 0,
+    kurse,
+    yenInEuro(datum: string): Promise<number> {
+      dienst.abrufe++;
+      const k = dienst.kurse[datum];
+      return k === undefined
+        ? Promise.reject(new Error("kein Kurs"))
+        : Promise.resolve(k);
+    },
+  };
+  return dienst;
+}
+
+function frischeApp(kurs = fakeKurs()) {
   const db = openDatabase(":memory:");
   return {
     db,
+    kurs,
     app: createApp(db, {
       domain: "ausgaben.example.de",
       origin: "https://ausgaben.example.de",
-    }),
+    }, kurs),
   };
 }
 
@@ -682,4 +699,91 @@ Deno.test("Begleichungen wirken je Gruppe getrennt", async () => {
   });
   assertEquals(await schulden(app, g1.id, ben.headers), []);
   assertEquals(await schulden(app, g2, ben.headers), [["Ben", "Anna", 1000]]);
+});
+
+Deno.test("Yen-Ausgabe: Tageskurs wird geholt, gespeichert und bleibt fix", async () => {
+  const { app, db, kurs } = frischeApp(fakeKurs({ "2026-05-01": 0.0061 }));
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const res = await ausgabe(app, id, anna.headers, {
+    waehrung: "JPY",
+    betragYen: 5001,
+    beschreibung: "Ramen",
+    datum: "2026-05-01",
+  });
+  assertEquals(res.status, 201);
+  const neu = await res.json();
+  // 5001 * 0,0061 = 30,5061 € → 3051 Cent; halbiert 1526 / 1525.
+  assertEquals(neu.betragCent, 3051);
+  assertEquals(neu.kurs, 0.0061);
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 1525]]);
+  // Kurs ändert sich später: gespeicherter Wert bleibt.
+  kurs.kurse["2026-05-01"] = 0.01;
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste[0].waehrung, "JPY");
+  assertEquals(liste[0].betragYen, 5001);
+  assertEquals(liste[0].kurs, 0.0061);
+  // Ändern (ohne Kurs) behält den gespeicherten Kurs und ruft nicht neu ab.
+  const abrufe = kurs.abrufe;
+  const put = await app.request(`/api/gruppen/${id}/ausgaben/${neu.id}`, {
+    method: "PUT",
+    headers: { ...anna.headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      waehrung: "JPY",
+      betragYen: 10000,
+      beschreibung: "Ramen",
+      datum: "2026-05-01",
+    }),
+  });
+  assertEquals(put.status, 200);
+  const geaendert = await put.json();
+  assertEquals(geaendert.kurs, 0.0061);
+  assertEquals(geaendert.betragCent, 6100);
+  assertEquals(kurs.abrufe, abrufe);
+});
+
+Deno.test("Yen-Ausgabe: Kurs manuell überschreiben, fehlender Kurs, Validierung", async () => {
+  const { app, db, kurs } = frischeApp();
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna", "Ben"]);
+  const yen = { waehrung: "JPY", beschreibung: "Zug", datum: "2026-05-02" };
+  const ok = await ausgabe(app, id, anna.headers, {
+    ...yen,
+    betragYen: 1000,
+    kurs: 0.007,
+  });
+  assertEquals(ok.status, 201);
+  assertEquals((await ok.json()).betragCent, 700);
+  assertEquals(kurs.abrufe, 0);
+  // Kein Kurs verfügbar und keiner angegeben: 502.
+  assertEquals(
+    (await ausgabe(app, id, anna.headers, { ...yen, betragYen: 1000 })).status,
+    502,
+  );
+  for (
+    const kaputt of [
+      { betragYen: 0 },
+      { betragYen: 10.5 },
+      { betragYen: 1000, kurs: -1 },
+      { betragYen: 1000, kurs: "x" },
+      { betragCent: 1000 },
+    ]
+  ) {
+    assertEquals(
+      (await ausgabe(app, id, anna.headers, { ...yen, kurs: 0.007, ...kaputt }))
+        .status,
+      400,
+    );
+  }
+  assertEquals(
+    (await ausgabe(app, id, anna.headers, {
+      waehrung: "USD",
+      betragCent: 100,
+      beschreibung: "x",
+    })).status,
+    400,
+  );
 });
