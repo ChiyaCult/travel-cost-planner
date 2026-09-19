@@ -105,23 +105,65 @@ async function gruppenLaden() {
     d.innerHTML = "<summary>Ausgaben</summary>" +
       '<form><input name="betrag" inputmode="decimal" placeholder="Betrag in €" required> ' +
       '<input name="beschreibung" placeholder="Beschreibung" required> ' +
-      '<input name="datum" type="date"><button>Eintragen</button>' +
+      '<input name="datum" type="date"> ' +
+      '<label>Beleg <input name="beleg" type="file" accept="image/*" capture="environment"></label> ' +
+      '<button>Eintragen</button>' +
       '<div class="auswahl">Aufteilen auf: ' + g.mitglieder.map((m) =>
         '<label><input type="checkbox" name="teilnehmer" value="' + m.id + '" checked> ' +
         m.name.replace(/[&<>"]/g, (ch) => "&#" + ch.charCodeAt(0) + ";") + "</label> ").join("") + "</div></form>" +
       '<div class="schulden"></div><ul class="ausgaben"></ul>';
     const eur = (c) => (c / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
     const laden = async () => {
-      const [a, s] = await Promise.all([
+      const [a, s, ich] = await Promise.all([
         fetch("/api/gruppen/" + g.id + "/ausgaben").then((r) => r.json()),
         fetch("/api/gruppen/" + g.id + "/schulden").then((r) => r.json()),
+        fetch("/api/me").then((r) => r.json()),
       ]);
       d.querySelector(".schulden").textContent = s.length
         ? s.map((x) => x.von.name + " schuldet " + x.an.name + " " + eur(x.betragCent)).join("; ")
         : "Keine Schulden.";
       d.querySelector(".ausgaben").replaceChildren(...a.map((x) => {
         const e = document.createElement("li");
-        e.textContent = x.datum + " · " + x.zahler.name + " · " + eur(x.betragCent) + " · " + x.beschreibung;
+        e.textContent = x.datum + " · " + x.zahler.name + " · " + eur(x.betragCent) + " · " + x.beschreibung + " ";
+        const url = "/api/gruppen/" + g.id + "/ausgaben/" + x.id + "/beleg";
+        if (x.hatBeleg) {
+          const l = document.createElement("a");
+          l.href = url;
+          l.target = "_blank";
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = "Beleg";
+          img.style.cssText = "height:3rem;vertical-align:middle;border-radius:4px";
+          l.append(img);
+          e.append(l, " ");
+        }
+        if (x.zahler.id === ich.id) {
+          const l = document.createElement("label");
+          l.append(x.hatBeleg ? "Beleg ersetzen " : "Beleg hinzufügen ");
+          const inp = document.createElement("input");
+          inp.type = "file";
+          inp.accept = "image/*";
+          inp.onchange = async () => {
+            const beleg = inp.files[0];
+            if (!beleg) return;
+            const r = await fetch(url, { method: "PUT", headers: { "content-type": beleg.type }, body: beleg });
+            if (!r.ok) meldung("Beleg nicht gespeichert: " + ((await r.json().catch(() => ({}))).fehler ?? r.status));
+            laden();
+          };
+          l.append(inp);
+          e.append(l);
+          if (x.hatBeleg) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = "Beleg entfernen";
+            b.onclick = async () => {
+              const r = await fetch(url, { method: "DELETE" });
+              if (!r.ok) meldung("Beleg nicht entfernt: " + ((await r.json().catch(() => ({}))).fehler ?? r.status));
+              laden();
+            };
+            e.append(" ", b);
+          }
+        }
         return e;
       }));
     };
@@ -133,7 +175,17 @@ async function gruppenLaden() {
       const body = { betragCent: cent, beschreibung: f.get("beschreibung") };
       if (f.get("datum")) body.datum = f.get("datum");
       body.teilnehmerIds = f.getAll("teilnehmer").map(Number);
-      try { await post("/api/gruppen/" + g.id + "/ausgaben", body); e.target.reset(); laden(); }
+      const beleg = f.get("beleg");
+      try {
+        const neu = await post("/api/gruppen/" + g.id + "/ausgaben", body);
+        if (beleg && beleg.size) {
+          const r = await fetch("/api/gruppen/" + g.id + "/ausgaben/" + neu.id + "/beleg", {
+            method: "PUT", headers: { "content-type": beleg.type }, body: beleg,
+          });
+          if (!r.ok) meldung("Ausgabe gespeichert, Beleg nicht: " + ((await r.json()).fehler ?? r.status));
+        }
+        e.target.reset(); laden();
+      }
       catch (err) { meldung(err.message); }
     };
     li.append(d);

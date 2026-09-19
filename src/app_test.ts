@@ -787,3 +787,154 @@ Deno.test("Yen-Ausgabe: Kurs manuell überschreiben, fehlender Kurs, Validierung
     400,
   );
 });
+
+const belegPfad = (g: number, a: number) =>
+  `/api/gruppen/${g}/ausgaben/${a}/beleg`;
+const belegHoch = (
+  app: ReturnType<typeof frischeApp>["app"],
+  pfad: string,
+  headers: Record<string, string>,
+  daten: Uint8Array,
+  typ = "image/jpeg",
+) =>
+  app.request(pfad, {
+    method: "PUT",
+    headers: { ...headers, "content-type": typ },
+    body: daten as Uint8Array<ArrayBuffer>,
+  });
+
+Deno.test("Beleg: Zahler lädt hoch, alle Mitglieder rufen ihn ab", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const { id: a } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Essen",
+  })).json();
+  const bild = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
+  assertEquals(
+    (await belegHoch(app, belegPfad(id, a), anna.headers, bild)).status,
+    204,
+  );
+  for (const s of [anna, ben]) {
+    const res = await app.request(belegPfad(id, a), { headers: s.headers });
+    assertEquals(res.status, 200);
+    assertEquals(res.headers.get("content-type"), "image/jpeg");
+    assertEquals(new Uint8Array(await res.arrayBuffer()), bild);
+  }
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste[0].hatBeleg, true);
+});
+
+Deno.test("Beleg: Nicht-Mitglieder erhalten 404, ohne Anmeldung 401", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna"]);
+  const fremd = createTestSession(db, { name: "Fremd" });
+  const { id: a } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Essen",
+  })).json();
+  await belegHoch(app, belegPfad(id, a), anna.headers, new Uint8Array([1]));
+  assertEquals(
+    (await app.request(belegPfad(id, a), { headers: fremd.headers })).status,
+    404,
+  );
+  assertEquals(
+    (await belegHoch(app, belegPfad(id, a), fremd.headers, new Uint8Array([1])))
+      .status,
+    404,
+  );
+  assertEquals((await app.request(belegPfad(id, a))).status, 401);
+});
+
+Deno.test("Beleg: nur der Zahler lädt hoch; Typ und Größe werden geprüft", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const { id: a } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Essen",
+  })).json();
+  const p = belegPfad(id, a);
+  assertEquals(
+    (await belegHoch(app, p, ben.headers, new Uint8Array([1]))).status,
+    403,
+  );
+  assertEquals(
+    (await belegHoch(app, p, anna.headers, new Uint8Array([1]), "text/html"))
+      .status,
+    400,
+  );
+  assertEquals(
+    (await belegHoch(app, p, anna.headers, new Uint8Array(0))).status,
+    400,
+  );
+  assertEquals(
+    (await belegHoch(
+      app,
+      p,
+      anna.headers,
+      new Uint8Array(10 * 1024 * 1024 + 1),
+    )).status,
+    413,
+  );
+  // ohne Beleg: 404 und hatBeleg false
+  assertEquals((await app.request(p, { headers: ben.headers })).status, 404);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste[0].hatBeleg, false);
+});
+
+Deno.test("Beleg: Löschen der Ausgabe entfernt den Beleg", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna"]);
+  const { id: a } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Essen",
+  })).json();
+  await belegHoch(app, belegPfad(id, a), anna.headers, new Uint8Array([1]));
+  const res = await app.request(`/api/gruppen/${id}/ausgaben/${a}`, {
+    method: "DELETE",
+    headers: anna.headers,
+  });
+  assertEquals(res.status, 204);
+  assertEquals(db.prepare("SELECT COUNT(*) AS n FROM receipts").get(), {
+    n: 0,
+  });
+});
+
+Deno.test("Beleg: nur der Zahler kann ihn entfernen", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const { id: a } = await (await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Essen",
+  })).json();
+  const p = belegPfad(id, a);
+  await belegHoch(app, p, anna.headers, new Uint8Array([1]));
+  const del = (h: Record<string, string>) =>
+    app.request(p, { method: "DELETE", headers: h });
+  assertEquals((await del(ben.headers)).status, 403);
+  assertEquals((await del(anna.headers)).status, 204);
+  assertEquals((await app.request(p, { headers: ben.headers })).status, 404);
+  assertEquals((await del(anna.headers)).status, 404);
+});
+
+Deno.test("Startseite (angemeldet) bietet Beleg hinzufügen und entfernen", async () => {
+  const { app, db } = frischeApp();
+  const { headers } = createTestSession(db, { name: "Anna" });
+  const html = await (await app.request("/", { headers })).text();
+  assertStringIncludes(html, "Beleg hinzufügen");
+  assertStringIncludes(html, "Beleg entfernen");
+  assertStringIncludes(html, 'method: "DELETE"');
+});

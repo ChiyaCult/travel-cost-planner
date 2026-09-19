@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS settlements (
   date TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Beleg: Foto der Rechnung, lokal in der DB; höchstens einer je Ausgabe.
+CREATE TABLE IF NOT EXISTS receipts (
+  expense_id INTEGER PRIMARY KEY REFERENCES expenses(id),
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS challenges (
   id TEXT PRIMARY KEY,
   challenge TEXT NOT NULL,

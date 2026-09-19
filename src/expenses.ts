@@ -11,6 +11,9 @@ export function teile(betragCent: number, anzahl: number): number[] {
   return Array.from({ length: anzahl }, (_, i) => basis + (i < rest ? 1 : 0));
 }
 
+const BELEG_TYPEN = ["image/jpeg", "image/png", "image/webp", "image/heic"];
+const BELEG_MAX = 10 * 1024 * 1024;
+
 const heute = () => new Date().toISOString().slice(0, 10);
 
 function gueltigesDatum(d: string): boolean {
@@ -232,11 +235,61 @@ export function registerExpenseRoutes(
     });
   });
 
+  // Beleg: nur der Zahler lädt hoch, alle Mitglieder der Gruppe rufen ab.
+  app.put("/api/gruppen/:id/ausgaben/:ausgabeId/beleg", async (c) => {
+    const r = eigeneAusgabe(c);
+    if (r.antwort) return r.antwort;
+    const mime = (c.req.header("content-type") ?? "").split(";")[0].trim();
+    if (!BELEG_TYPEN.includes(mime)) {
+      return c.json({ fehler: "Beleg muss ein Bild sein" }, 400);
+    }
+    const daten = new Uint8Array(await c.req.arrayBuffer());
+    if (daten.length === 0) return c.json({ fehler: "Beleg ist leer" }, 400);
+    if (daten.length > BELEG_MAX) {
+      return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
+    }
+    db.prepare(
+      "INSERT OR REPLACE INTO receipts (expense_id, mime, data) VALUES (?, ?, ?)",
+    ).run(r.id, mime, daten);
+    return c.body(null, 204);
+  });
+
+  app.delete("/api/gruppen/:id/ausgaben/:ausgabeId/beleg", (c) => {
+    const r = eigeneAusgabe(c);
+    if (r.antwort) return r.antwort;
+    const { changes } = db
+      .prepare("DELETE FROM receipts WHERE expense_id = ?")
+      .run(r.id);
+    if (changes === 0) return c.json({ fehler: "Beleg nicht gefunden" }, 404);
+    return c.body(null, 204);
+  });
+
+  app.get("/api/gruppen/:id/ausgaben/:ausgabeId/beleg", (c) => {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
+    const z = db
+      .prepare(
+        `SELECT r.mime, r.data FROM receipts r JOIN expenses e ON e.id = r.expense_id
+         WHERE e.id = ? AND e.group_id = ?`,
+      )
+      .get(Number(c.req.param("ausgabeId")), gruppeId) as
+        | { mime: string; data: Uint8Array }
+        | undefined;
+    if (!z) return c.json({ fehler: "Beleg nicht gefunden" }, 404);
+    return c.body(z.data as Uint8Array<ArrayBuffer>, 200, {
+      "content-type": z.mime,
+      "cache-control": "private",
+      "x-content-type-options": "nosniff",
+    });
+  });
+
   app.delete("/api/gruppen/:id/ausgaben/:ausgabeId", (c) => {
     const r = eigeneAusgabe(c);
     if (r.antwort) return r.antwort;
     db.exec("BEGIN");
     try {
+      db.prepare("DELETE FROM receipts WHERE expense_id = ?").run(r.id);
       db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
       db.prepare("DELETE FROM expenses WHERE id = ?").run(r.id);
       db.exec("COMMIT");
@@ -255,7 +308,8 @@ export function registerExpenseRoutes(
       .prepare(
         `SELECT e.id, e.amount_cents AS betragCent, e.description AS beschreibung,
                 e.date AS datum, e.original_yen AS yen, e.exchange_rate AS kurs,
-                u.id AS zahlerId, u.name AS zahlerName
+                u.id AS zahlerId, u.name AS zahlerName,
+                EXISTS (SELECT 1 FROM receipts r WHERE r.expense_id = e.id) AS hatBeleg
          FROM expenses e JOIN users u ON u.id = e.payer_id
          WHERE e.group_id = ? ORDER BY e.date DESC, e.id DESC`,
       )
@@ -268,10 +322,12 @@ export function registerExpenseRoutes(
         kurs: number | null;
         zahlerId: number;
         zahlerName: string;
+        hatBeleg: number;
       }[];
     return c.json(
-      zeilen.map(({ zahlerId, zahlerName, yen, kurs, ...rest }) => ({
+      zeilen.map(({ zahlerId, zahlerName, yen, kurs, hatBeleg, ...rest }) => ({
         ...rest,
+        hatBeleg: hatBeleg === 1,
         ...waehrungsfelder(yen, kurs),
         zahler: { id: zahlerId, name: zahlerName },
       })),
