@@ -215,9 +215,12 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       .prepare(
         `SELECT e.payer_id AS zahler, s.user_id AS schuldner, s.share_cents AS cent
          FROM expenses e JOIN expense_shares s ON s.expense_id = e.id
-         WHERE e.group_id = ? AND s.user_id != e.payer_id`,
+         WHERE e.group_id = ? AND s.user_id != e.payer_id
+         UNION ALL
+         -- Eine Begleichung wirkt wie ein Anteil in Gegenrichtung.
+         SELECT from_id, to_id, amount_cents FROM settlements WHERE group_id = ?`,
       )
-      .all(gruppeId) as unknown as {
+      .all(gruppeId, gruppeId) as unknown as {
         zahler: number;
         schuldner: number;
         cent: number;
@@ -243,5 +246,138 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       });
     }
     return c.json(schulden);
+  });
+
+  /** Prüft Empfänger, Betrag und Datum einer Begleichung. */
+  async function pruefeBegleichung(
+    c: Context<Env>,
+    gruppeId: number,
+    selbst: number,
+  ) {
+    const body = await c.req.json().catch(() => ({})) as {
+      anId?: unknown;
+      betragCent?: unknown;
+      datum?: unknown;
+    };
+    const { anId, betragCent } = body;
+    if (
+      typeof betragCent !== "number" || !Number.isSafeInteger(betragCent) ||
+      betragCent <= 0
+    ) {
+      return { fehler: "Betrag ungültig" };
+    }
+    if (
+      typeof anId !== "number" || anId === selbst ||
+      !istMitglied(db, gruppeId, anId)
+    ) {
+      return { fehler: "Empfänger ungültig" };
+    }
+    const datum = body.datum === undefined ? heute() : body.datum;
+    if (typeof datum !== "string" || !gueltigesDatum(datum)) {
+      return { fehler: "Datum ungültig" };
+    }
+    return { anId, betragCent, datum };
+  }
+
+  const zeigeBegleichung = (
+    gruppeId: number,
+    id: number,
+  ) => {
+    const z = db
+      .prepare(
+        `SELECT s.id, s.amount_cents AS betragCent, s.date AS datum,
+                s.from_id AS vonId, uf.name AS vonName,
+                s.to_id AS anId, ut.name AS anName
+         FROM settlements s
+         JOIN users uf ON uf.id = s.from_id JOIN users ut ON ut.id = s.to_id
+         WHERE s.id = ? AND s.group_id = ?`,
+      )
+      .get(id, gruppeId) as unknown as {
+        id: number;
+        betragCent: number;
+        datum: string;
+        vonId: number;
+        vonName: string;
+        anId: number;
+        anName: string;
+      };
+    return {
+      id: z.id,
+      von: { id: z.vonId, name: z.vonName },
+      an: { id: z.anId, name: z.anName },
+      betragCent: z.betragCent,
+      datum: z.datum,
+    };
+  };
+
+  app.post("/api/gruppen/:id/begleichungen", async (c) => {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
+    const e = await pruefeBegleichung(c, gruppeId, user.id);
+    if ("fehler" in e) return c.json({ fehler: e.fehler }, 400);
+    const { lastInsertRowid } = db
+      .prepare(
+        `INSERT INTO settlements (group_id, from_id, to_id, amount_cents, date)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(gruppeId, user.id, e.anId, e.betragCent, e.datum);
+    return c.json(zeigeBegleichung(gruppeId, Number(lastInsertRowid)), 201);
+  });
+
+  /** Lädt die Begleichung: 404 für Fremde, 403 für alle außer dem Eintragenden. */
+  function eigeneBegleichung(c: Context<Env>) {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) {
+      return { antwort: c.json(nichtGefunden, 404) };
+    }
+    const id = Number(c.req.param("begleichungId"));
+    const zeile = db
+      .prepare("SELECT from_id FROM settlements WHERE id = ? AND group_id = ?")
+      .get(id, gruppeId) as { from_id: number } | undefined;
+    if (!zeile) {
+      return { antwort: c.json({ fehler: "Begleichung nicht gefunden" }, 404) };
+    }
+    if (zeile.from_id !== user.id) {
+      return {
+        antwort: c.json(
+          { fehler: "Nur der Eintragende darf die Begleichung ändern" },
+          403,
+        ),
+      };
+    }
+    return { antwort: undefined, gruppeId, id, user };
+  }
+
+  app.put("/api/gruppen/:id/begleichungen/:begleichungId", async (c) => {
+    const r = eigeneBegleichung(c);
+    if (r.antwort) return r.antwort;
+    const e = await pruefeBegleichung(c, r.gruppeId, r.user.id);
+    if ("fehler" in e) return c.json({ fehler: e.fehler }, 400);
+    db.prepare(
+      "UPDATE settlements SET to_id = ?, amount_cents = ?, date = ? WHERE id = ?",
+    ).run(e.anId, e.betragCent, e.datum, r.id);
+    return c.json(zeigeBegleichung(r.gruppeId, r.id));
+  });
+
+  app.delete("/api/gruppen/:id/begleichungen/:begleichungId", (c) => {
+    const r = eigeneBegleichung(c);
+    if (r.antwort) return r.antwort;
+    db.prepare("DELETE FROM settlements WHERE id = ?").run(r.id);
+    return c.body(null, 204);
+  });
+
+  // Alle Mitglieder der Gruppe sehen alle Begleichungen, auch der Empfänger.
+  app.get("/api/gruppen/:id/begleichungen", (c) => {
+    const user = c.get("user")!;
+    const gruppeId = Number(c.req.param("id"));
+    if (!istMitglied(db, gruppeId, user.id)) return c.json(nichtGefunden, 404);
+    const ids = db
+      .prepare(
+        "SELECT id FROM settlements WHERE group_id = ? ORDER BY date DESC, id DESC",
+      )
+      .all(gruppeId) as unknown as { id: number }[];
+    return c.json(ids.map(({ id }) => zeigeBegleichung(gruppeId, id)));
   });
 }

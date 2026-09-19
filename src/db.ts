@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS expense_shares (
   share_cents INTEGER NOT NULL,
   PRIMARY KEY (expense_id, user_id)
 );
+-- Begleichung: from_id (der Eintragende) hat to_id außerhalb der App bezahlt.
+CREATE TABLE IF NOT EXISTS settlements (
+  id INTEGER PRIMARY KEY,
+  group_id INTEGER NOT NULL REFERENCES groups(id),
+  from_id INTEGER NOT NULL REFERENCES users(id),
+  to_id INTEGER NOT NULL REFERENCES users(id),
+  amount_cents INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS challenges (
   id TEXT PRIMARY KEY,
   challenge TEXT NOT NULL,

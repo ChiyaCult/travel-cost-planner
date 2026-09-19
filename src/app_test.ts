@@ -552,3 +552,134 @@ Deno.test("Zahler löscht Ausgabe: Schulden verschwinden", async () => {
   assertEquals(await schulden(app, id, ben.headers), []);
   assertEquals((await del()).status, 404);
 });
+
+const begleichung = (
+  app: ReturnType<typeof frischeApp>["app"],
+  id: number,
+  headers: Record<string, string>,
+  body: unknown,
+  method = "POST",
+  bid?: number,
+) =>
+  app.request(
+    `/api/gruppen/${id}/begleichungen${bid ? `/${bid}` : ""}`,
+    { ...json(headers, body), method },
+  );
+
+Deno.test("Begleichung (auch Teilbetrag) mindert die Schuld sofort", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  await ausgabe(app, id, anna.headers, { betragCent: 2000, beschreibung: "A" });
+  const res = await begleichung(app, id, ben.headers, {
+    anId: anna.userId,
+    betragCent: 300,
+  });
+  assertEquals(res.status, 201);
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 700]]);
+  // Der Empfänger sieht die Begleichung.
+  const liste = await (await app.request(`/api/gruppen/${id}/begleichungen`, {
+    headers: anna.headers,
+  })).json();
+  assertEquals(liste.length, 1);
+  assertEquals(liste[0].von.name, "Ben");
+  assertEquals(liste[0].an.name, "Anna");
+  assertEquals(liste[0].betragCent, 300);
+});
+
+Deno.test("Begleichung: volle Zahlung, ungültige Eingaben", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const fremd = createTestSession(db, { name: "Fremd" });
+  await ausgabe(app, id, anna.headers, { betragCent: 2000, beschreibung: "A" });
+  const ok = { anId: anna.userId, betragCent: 1000 };
+  for (
+    const schlecht of [
+      { ...ok, betragCent: 0 },
+      { ...ok, betragCent: 1.5 },
+      { ...ok, anId: ben.userId },
+      { ...ok, anId: fremd.userId },
+      { ...ok, datum: "gestern" },
+    ]
+  ) {
+    assertEquals(
+      (await begleichung(app, id, ben.headers, schlecht)).status,
+      400,
+    );
+  }
+  assertEquals((await begleichung(app, id, fremd.headers, ok)).status, 404);
+  assertEquals((await begleichung(app, id, ben.headers, ok)).status, 201);
+  assertEquals(await schulden(app, id, ben.headers), []);
+});
+
+Deno.test("Nur der Eintragende ändert oder nimmt die Begleichung zurück", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const fremd = createTestSession(db, { name: "Fremd" });
+  await ausgabe(app, id, anna.headers, { betragCent: 2000, beschreibung: "A" });
+  const { id: bid } = await (await begleichung(app, id, ben.headers, {
+    anId: anna.userId,
+    betragCent: 300,
+  })).json();
+  const neu = { anId: anna.userId, betragCent: 500 };
+  const del = (headers: Record<string, string>) =>
+    app.request(`/api/gruppen/${id}/begleichungen/${bid}`, {
+      method: "DELETE",
+      headers,
+    });
+  // Empfänger und Fremde bekommen einen Fehler.
+  assertEquals(
+    (await begleichung(app, id, anna.headers, neu, "PUT", bid)).status,
+    403,
+  );
+  assertEquals((await del(anna.headers)).status, 403);
+  assertEquals(
+    (await begleichung(app, id, fremd.headers, neu, "PUT", bid)).status,
+    404,
+  );
+  assertEquals((await del(fremd.headers)).status, 404);
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 700]]);
+  // Der Eintragende ändert, dann nimmt er zurück.
+  assertEquals(
+    (await begleichung(app, id, ben.headers, neu, "PUT", bid)).status,
+    200,
+  );
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 500]]);
+  assertEquals((await del(ben.headers)).status, 204);
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 1000]]);
+  assertEquals((await del(ben.headers)).status, 404);
+});
+
+Deno.test("Begleichungen wirken je Gruppe getrennt", async () => {
+  const { app, db } = frischeApp();
+  const g1 = await gruppeMit(app, db, ["Anna", "Ben"]);
+  const [anna, ben] = g1.sessions;
+  // Zweite Gruppe mit denselben Nutzern.
+  const g2 = (await (await app.request(
+    "/api/gruppen",
+    json(anna.headers, { name: "Zwei" }),
+  )).json()).id;
+  await app.request(
+    `/api/gruppen/${g2}/mitglieder`,
+    json(anna.headers, { nutzerId: ben.userId }),
+  );
+  await ausgabe(app, g1.id, anna.headers, {
+    betragCent: 2000,
+    beschreibung: "A",
+  });
+  await ausgabe(app, g2, anna.headers, { betragCent: 2000, beschreibung: "B" });
+  await begleichung(app, g1.id, ben.headers, {
+    anId: anna.userId,
+    betragCent: 1000,
+  });
+  assertEquals(await schulden(app, g1.id, ben.headers), []);
+  assertEquals(await schulden(app, g2, ben.headers), [["Ben", "Anna", 1000]]);
+});
