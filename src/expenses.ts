@@ -29,6 +29,7 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       betragCent?: unknown;
       beschreibung?: unknown;
       datum?: unknown;
+      teilnehmerIds?: unknown;
     };
     const { betragCent } = body;
     if (
@@ -47,7 +48,20 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
     }
 
     const alle = mitglieder(db, gruppeId);
-    const anteile = teile(betragCent, alle.length);
+    // Standard alle; sonst die gewählten Mitglieder in Beitrittsreihenfolge.
+    let betroffene = alle;
+    if (body.teilnehmerIds !== undefined) {
+      const ids = body.teilnehmerIds;
+      if (
+        !Array.isArray(ids) || ids.length === 0 ||
+        new Set(ids).size !== ids.length ||
+        !ids.every((i) => alle.some((m) => m.id === i))
+      ) {
+        return c.json({ fehler: "Auswahl ungültig" }, 400);
+      }
+      betroffene = alle.filter((m) => ids.includes(m.id));
+    }
+    const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
       const { lastInsertRowid } = db
@@ -60,7 +74,7 @@ export function registerExpenseRoutes(app: Hono<Env>, db: DatabaseSync) {
       const ins = db.prepare(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
       );
-      alle.forEach((m, i) => ins.run(id, m.id, anteile[i]));
+      betroffene.forEach((m, i) => ins.run(id, m.id, anteile[i]));
       db.exec("COMMIT");
       return c.json({
         id,

@@ -105,7 +105,10 @@ async function gruppenLaden() {
     d.innerHTML = "<summary>Ausgaben</summary>" +
       '<form><input name="betrag" inputmode="decimal" placeholder="Betrag in €" required> ' +
       '<input name="beschreibung" placeholder="Beschreibung" required> ' +
-      '<input name="datum" type="date"><button>Eintragen</button></form>' +
+      '<input name="datum" type="date"><button>Eintragen</button>' +
+      '<div class="auswahl">Aufteilen auf: ' + g.mitglieder.map((m) =>
+        '<label><input type="checkbox" name="teilnehmer" value="' + m.id + '" checked> ' +
+        m.name.replace(/[&<>"]/g, (ch) => "&#" + ch.charCodeAt(0) + ";") + "</label> ").join("") + "</div></form>" +
       '<div class="schulden"></div><ul class="ausgaben"></ul>';
     const eur = (c) => (c / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
     const laden = async () => {
@@ -129,6 +132,7 @@ async function gruppenLaden() {
       const cent = Math.round(Number(String(f.get("betrag")).replace(",", ".")) * 100);
       const body = { betragCent: cent, beschreibung: f.get("beschreibung") };
       if (f.get("datum")) body.datum = f.get("datum");
+      body.teilnehmerIds = f.getAll("teilnehmer").map(Number);
       try { await post("/api/gruppen/" + g.id + "/ausgaben", body); e.target.reset(); laden(); }
       catch (err) { meldung(err.message); }
     };

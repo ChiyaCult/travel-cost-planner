@@ -361,3 +361,102 @@ Deno.test("Ausgabe: Standarddatum heute, Validierung, Nicht-Mitglied 404", async
     assertEquals(r.status, 404);
   }
 });
+
+Deno.test("Auswahl mit einem anderen Mitglied: volle Schuld an den Zahler", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben, cem] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+    "Cem",
+  ]);
+  const res = await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Buch",
+    teilnehmerIds: [ben.userId],
+  });
+  assertEquals(res.status, 201);
+  assertEquals(await schulden(app, id, cem.headers), [["Ben", "Anna", 1000]]);
+});
+
+Deno.test("Auswahl mit Zahler: Zahler zählt mit, Nichtgewählte schulden nichts", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+    "Cem",
+  ]);
+  await ausgabe(app, id, anna.headers, {
+    betragCent: 1000,
+    beschreibung: "Kino",
+    teilnehmerIds: [anna.userId, ben.userId],
+  });
+  assertEquals(await schulden(app, id, anna.headers), [["Ben", "Anna", 500]]);
+});
+
+Deno.test("Verrechnung nur je Paar, nicht über Dritte", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben, cem] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+    "Cem",
+  ]);
+  await ausgabe(app, id, anna.headers, {
+    betragCent: 5000,
+    beschreibung: "A",
+    teilnehmerIds: [ben.userId],
+  });
+  await ausgabe(app, id, ben.headers, {
+    betragCent: 2000,
+    beschreibung: "B",
+    teilnehmerIds: [anna.userId],
+  });
+  await ausgabe(app, id, ben.headers, {
+    betragCent: 1000,
+    beschreibung: "C",
+    teilnehmerIds: [cem.userId],
+  });
+  // Ben→Anna 30 €, Cem→Ben 10 €: keine Kette Cem→Anna.
+  assertEquals(await schulden(app, id, anna.headers), [
+    ["Ben", "Anna", 3000],
+    ["Cem", "Ben", 1000],
+  ]);
+});
+
+Deno.test("Keine Verrechnung zwischen Gruppen", async () => {
+  const { app, db } = frischeApp();
+  const { id: g1, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const g2 = (await (await app.request(
+    "/api/gruppen",
+    json(anna.headers, { name: "Zweite" }),
+  )).json()).id;
+  await app.request(
+    `/api/gruppen/${g2}/mitglieder`,
+    json(anna.headers, { nutzerId: ben.userId }),
+  );
+  await ausgabe(app, g1, anna.headers, { betragCent: 2000, beschreibung: "A" });
+  await ausgabe(app, g2, ben.headers, { betragCent: 2000, beschreibung: "B" });
+  assertEquals(await schulden(app, g1, anna.headers), [["Ben", "Anna", 1000]]);
+  assertEquals(await schulden(app, g2, anna.headers), [["Anna", "Ben", 1000]]);
+});
+
+Deno.test("Ungültige Auswahl wird abgelehnt", async () => {
+  const { app, db } = frischeApp();
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const fremd = createTestSession(db, { name: "Fremd" });
+  for (
+    const auswahl of [[], [fremd.userId], [ben.userId, ben.userId], "x", [null]]
+  ) {
+    const r = await ausgabe(app, id, anna.headers, {
+      betragCent: 100,
+      beschreibung: "x",
+      teilnehmerIds: auswahl,
+    });
+    assertEquals(r.status, 400);
+  }
+});
