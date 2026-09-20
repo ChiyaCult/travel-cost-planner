@@ -4,6 +4,13 @@ const esc = (s: string) =>
     "&quot;",
   );
 
+/** Setzt den CSP-Nonce der Antwort in das Inline-Skript der Seite. */
+export const mitNonce = (
+  html: string,
+  c: { get(key: "secureHeadersNonce"): string | undefined },
+) =>
+  html.replace("<script>", `<script nonce="${c.get("secureHeadersNonce")}">`);
+
 // Pixel-Rahmen: 2px-Linie mit ausgesparten Ecken, optional mit hartem Versatzschatten.
 const px = (rahmen: string, schatten?: string, versatz = 4) =>
   `0 -2px 0 0 ${rahmen},0 2px 0 0 ${rahmen},-2px 0 0 0 ${rahmen},2px 0 0 0 ${rahmen}${
@@ -123,6 +130,15 @@ label.btn:has(input:focus-visible){outline:2px dashed var(--fokus);outline-offse
 .liste .text strong{font-weight:400}
 .betrag{text-align:right;white-space:nowrap;font-size:1.05rem}
 .betrag small{display:block;font-size:.85rem}
+/* Schulden/Zahlungen: auf schmalen Schirmen rutscht der Knopf in die zweite Reihe,
+   damit der Text nicht auf zwei Buchstaben je Zeile zusammengequetscht wird. */
+.liste>li.schuld{flex-wrap:wrap;row-gap:.4rem}
+.liste>li.schuld .text{flex:1 1 9rem}
+.liste>li.schuld .betrag{margin-left:auto}
+.liste>li.schuld .btn{margin-left:auto;flex:none}
+.aufteilung{margin:1.2rem 0}
+.aufteilung h3{font-size:1rem;margin-bottom:.2rem}
+.aufteilung .liste>li{padding:.5rem 0}
 .gruppenkarte{display:flex;gap:.9rem;align-items:center;text-decoration:none;color:inherit;width:100%;min-height:2.75rem}
 .gruppenkarte .name{font-size:1.1rem}
 .gruppenkarte:hover .name{text-decoration:underline;text-decoration-thickness:2px}
@@ -325,9 +341,12 @@ function h(tag, attrs, ...kids) {
     else if (v === true) e.setAttribute(k, "");
     else if (v !== false && v != null) e.setAttribute(k, v);
   }
-  e.append(...kids.flat().filter((x) => x != null && x !== false));
+  e.append(...kinder(kids));
   return e;
 }
+const kinder = (kids) => kids.flat().filter((x) => x != null && x !== false);
+// replaceChildren macht aus null den Text "null" - deshalb vorher filtern.
+const fuellen = (el, ...kids) => el.replaceChildren(...kinder(kids));
 async function api(url, opt) {
   const r = await fetch(url, opt);
   if (!r.ok) {
@@ -695,7 +714,8 @@ function detailZeigen(x) {
     } }, "Löschen"));
   }
   const yen = x.waehrung === "JPY";
-  $("detail").replaceChildren(
+  const beteiligte = x.beteiligte || [];
+  fuellen($("detail"),
     h("h2", {}, "Ausgabe"),
     h("p", { class: "detail-titel", id: "detail-titel" }, x.beschreibung),
     h("div", { class: "detail-betrag" },
@@ -703,6 +723,14 @@ function detailZeigen(x) {
       yen ? h("small", {}, "= " + eur(x.betragCent)) : null),
     yen && x.kurs ? h("small", {}, "Kurs: 1 € = " + (1 / x.kurs).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " ¥") : null,
     h("p", {}, "Bezahlt von " + (meine ? "dir" : x.zahler.name) + " am " + datumKurz(x.datum)),
+    beteiligte.length
+      ? h("div", { class: "aufteilung" },
+        h("h3", {}, "Aufgeteilt auf " + beteiligte.length + (beteiligte.length === 1 ? " Person" : " Personen")),
+        h("ul", { class: "liste" }, beteiligte.map((p) => h("li", {},
+          avatar(p.name, p.id),
+          h("span", { class: "text" }, h("strong", {}, p.id === ich.id ? "Du" : p.name)),
+          h("span", { class: "betrag" }, eur(p.anteilCent))))))
+      : null,
     x.hatBeleg
       ? h("a", { class: "beleg-gross", href: beleg, target: "_blank", "aria-label": "Beleg in voller Größe öffnen" },
         h("img", { src: beleg, alt: "Beleg zu " + x.beschreibung }))
@@ -727,7 +755,7 @@ function standZeigen(s) {
 
 function schuldenZeigen(s, zahlungen) {
   $("schulden").replaceChildren(s.length
-    ? h("ul", { class: "liste" }, s.map((x) => h("li", {},
+    ? h("ul", { class: "liste" }, s.map((x) => h("li", { class: "schuld" },
       avatar(x.von.name, x.von.id),
       h("span", { class: "text" }, h("strong", {}, (x.von.id === ich.id ? "Du schuldest " : x.von.name + " schuldet ") + (x.an.id === ich.id ? "dir" : x.an.name))),
       h("span", { class: "betrag" }, eur(x.betragCent)),
@@ -741,7 +769,7 @@ function schuldenZeigen(s, zahlungen) {
         : null)))
     : leer("Alles beglichen", "Niemand schuldet hier etwas."));
   $("zahlungen").replaceChildren(zahlungen.length
-    ? h("ul", { class: "liste" }, zahlungen.map((z) => h("li", {},
+    ? h("ul", { class: "liste" }, zahlungen.map((z) => h("li", { class: "schuld" },
       avatar(z.von.name, z.von.id),
       h("span", { class: "text" }, h("strong", {}, (z.von.id === ich.id ? "Du" : z.von.name) + " → " + (z.an.id === ich.id ? "dich" : z.an.name)), h("small", {}, datumKurz(z.datum))),
       h("span", { class: "betrag" }, eur(z.betragCent)),

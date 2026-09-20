@@ -1,5 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { createApp } from "./app.ts";
+import { CHALLENGES_MAX } from "./auth.ts";
 import { openDatabase } from "./db.ts";
 import { createTestSession } from "./testing.ts";
 
@@ -307,6 +308,11 @@ Deno.test("Ausgabe zu zweit: Zahler zählt mit, Gegenüber schuldet die Hälfte"
   assertEquals(liste[0].betragCent, 1001);
   assertEquals(liste[0].datum, "2026-05-01");
   assertEquals(liste[0].beschreibung, "Essen");
+  // Die Detailansicht zeigt, auf wen aufgeteilt wurde.
+  assertEquals(liste[0].beteiligte, [
+    { id: anna.userId, name: "Anna", anteilCent: 501 },
+    { id: ben.userId, name: "Ben", anteilCent: 500 },
+  ]);
 });
 
 Deno.test("Ausgabe zu dritt: 1000 Cent, Restcent in Beitrittsreihenfolge", async () => {
@@ -1061,4 +1067,101 @@ Deno.test("Gruppenseite verkleinert Belegfotos vor dem Hochladen", async () => {
   assertStringIncludes(html, "belegSenden(beleg, await verkleinern(datei))");
   assertStringIncludes(html, 'const beleg = belegBild ?? f.get("beleg")');
   assertEquals(html.split("verkleinern(").length - 1, 3);
+});
+
+Deno.test("Sitzung läuft nach 30 Tagen auch serverseitig ab", async () => {
+  const { app, db } = frischeApp();
+  const { headers } = createTestSession(db);
+  assertEquals((await app.request("/api/me", { headers })).status, 200);
+  db.exec("UPDATE sessions SET created_at = datetime('now', '-31 days')");
+  assertEquals((await app.request("/api/me", { headers })).status, 401);
+});
+
+Deno.test("Security-Header: CSP mit Nonce passend zum Inline-Skript, kein Framing", async () => {
+  const { app } = frischeApp();
+  const res = await app.request("/");
+  const csp = res.headers.get("content-security-policy") ?? "";
+  const nonce = csp.match(/'nonce-([^']+)'/)?.[1];
+  assertEquals(typeof nonce, "string");
+  assertStringIncludes(csp, "frame-ancestors 'none'");
+  assertStringIncludes(await res.text(), `<script nonce="${nonce}">`);
+  assertEquals(res.headers.get("x-frame-options"), "DENY");
+  assertEquals(res.headers.get("x-content-type-options"), "nosniff");
+  assertStringIncludes(
+    res.headers.get("strict-transport-security") ?? "",
+    "max-age=",
+  );
+});
+
+Deno.test("Zu große Anfragen werden vor dem Einlesen abgelehnt", async () => {
+  const { app, db } = frischeApp();
+  const { headers } = createTestSession(db);
+  const gross = json(headers, { name: "x".repeat(100 * 1024) });
+  assertEquals((await app.request("/api/gruppen", gross)).status, 413);
+  // Auch ohne Anmeldung, z. B. beim Login.
+  assertEquals(
+    (await app.request("/api/login", json({}, { x: "x".repeat(100 * 1024) })))
+      .status,
+    413,
+  );
+  // Belege dürfen größer als JSON sein.
+  const { id } =
+    await (await app.request("/api/gruppen", json(headers, { name: "Reise" })))
+      .json();
+  const ausgabe = await (await app.request(
+    `/api/gruppen/${id}/ausgaben`,
+    json(headers, { betragCent: 100, beschreibung: "Essen" }),
+  )).json();
+  const res = await app.request(
+    `/api/gruppen/${id}/ausgaben/${ausgabe.id}/beleg`,
+    {
+      method: "PUT",
+      headers: { ...headers, "content-type": "image/jpeg" },
+      body: new Uint8Array(200 * 1024),
+    },
+  );
+  assertEquals(res.status, 204);
+});
+
+Deno.test("Offene Challenges sind begrenzt", async () => {
+  const { app, db } = frischeApp();
+  const ins = db.prepare(
+    "INSERT INTO challenges (id, challenge, expires_at) VALUES (?, 'c', ?)",
+  );
+  for (let i = 0; i < CHALLENGES_MAX; i++) {
+    ins.run(String(i), Date.now() + 60_000);
+  }
+  const res = await app.request("/api/login/optionen", { method: "POST" });
+  assertEquals(res.status, 429);
+  // Abgelaufene zählen nicht.
+  db.exec("UPDATE challenges SET expires_at = 0");
+  assertEquals(
+    (await app.request("/api/login/optionen", { method: "POST" })).status,
+    200,
+  );
+});
+
+Deno.test("Texterkennung: höchstens zwei gleichzeitig", async () => {
+  const db = openDatabase(":memory:");
+  let freigeben = () => {};
+  const blockiert = new Promise<void>((r) => freigeben = r);
+  const app = createApp(
+    db,
+    { domain: "ausgaben.example.de", origin: "https://ausgaben.example.de" },
+    fakeKurs(),
+    { lies: () => blockiert.then(() => "合計 ¥500") },
+  );
+  const { headers } = createTestSession(db);
+  const senden = () =>
+    app.request("/api/erkennung/summe", {
+      method: "POST",
+      headers: { ...headers, "content-type": "image/jpeg" },
+      body: new Uint8Array([1]),
+    });
+  const laufend = [senden(), senden()];
+  await new Promise((r) => setTimeout(r, 10));
+  assertEquals((await senden()).status, 429);
+  freigeben();
+  for (const r of await Promise.all(laufend)) assertEquals(r.status, 200);
+  assertEquals((await senden()).status, 200);
 });
