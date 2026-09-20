@@ -30,15 +30,11 @@ function schreibe(
   else console.log(zeile);
 }
 
-/** Beschreibt den Grund eines Fehlers, ohne Aufrufliste (die steht separat). */
-function grund(ursache: unknown): Felder {
-  if (ursache instanceof Error) {
-    return {
-      grund: `${ursache.name}: ${ursache.message}`,
-      stack: ursache.stack,
-    };
-  }
-  return { grund: String(ursache) };
+/** Beschreibt den Grund eines Fehlers; `ursache` darf alles sein, was geworfen wurde. */
+function grund(ursache: unknown): string {
+  return ursache instanceof Error
+    ? `${ursache.name}: ${ursache.message}`
+    : String(ursache);
 }
 
 export const log = {
@@ -47,8 +43,20 @@ export const log = {
     schreibe("info", name, felder);
   },
 
-  /** Ein Fehler samt Ursache; `ursache` darf alles sein, was geworfen wurde. */
+  /** Ein vorhergesehener Fehler, z. B. ein Dienst, der nicht antwortet. */
   fehler(name: string, ursache: unknown, felder: Felder = {}): void {
-    schreibe("fehler", name, { ...felder, ...grund(ursache) });
+    schreibe("fehler", name, { ...felder, grund: grund(ursache) });
+  },
+
+  /**
+   * Eine unerwartete Ausnahme: wie `fehler`, aber mit Aufrufliste – die braucht
+   * man nur dort, wo der Fehler ein Fehler im Programm sein kann.
+   */
+  ausnahme(name: string, ursache: unknown, felder: Felder = {}): void {
+    schreibe("fehler", name, {
+      ...felder,
+      grund: grund(ursache),
+      stack: ursache instanceof Error ? ursache.stack : undefined,
+    });
   },
 };

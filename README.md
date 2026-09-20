@@ -40,12 +40,13 @@ nutzbar, nur ohne Vorschlag.
 ## Protokoll (Logs)
 
 Die App schreibt je Eintrag eine Zeile JSON: Ereignisse (`stufe: "info"`) auf
-stdout, Fehler (`stufe: "fehler"`, mit `grund` und `stack`) auf stderr – zu
-lesen mit `docker compose logs`. Protokolliert werden fachliche Ereignisse
-(`nutzer.beigetreten`, `gruppe.angelegt`, `ausgabe.erfasst`, `schuld.beglichen`
-…) sowie jeder unerwartete Fehler einer Anfrage. Im Protokoll stehen nur Ids und
-Eckdaten (Beträge, Gruppe, Datum), **nie** Namen, Beschreibungen oder Belege.
-`LOG=aus` schaltet das Protokoll ab (nutzen die Tests).
+stdout, Fehler (`stufe: "fehler"`, mit `grund`; die Aufrufliste `stack` nur bei
+unerwarteten Ausnahmen) auf stderr – zu lesen mit `docker compose logs`.
+Protokolliert werden fachliche Ereignisse (`nutzer.beigetreten`,
+`gruppe.angelegt`, `ausgabe.erfasst`, `schuld.beglichen` …) sowie jeder
+unerwartete Fehler einer Anfrage. Im Protokoll stehen nur Ids und Eckdaten
+(Beträge, Gruppe, Datum), **nie** Namen, Beschreibungen oder Belege. `LOG=aus`
+schaltet das Protokoll ab (nutzen die Tests).
 
 ```bash
 docker compose logs -f | grep '"stufe":"fehler"'

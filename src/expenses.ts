@@ -177,10 +177,6 @@ export function registerExpenseRoutes(
       }, 201);
     } catch (e) {
       db.exec("ROLLBACK");
-      log.fehler("ausgabe.erfassen-fehlgeschlagen", e, {
-        gruppeId,
-        zahlerId: user.id,
-      });
       throw e;
     }
   });
@@ -241,10 +237,6 @@ export function registerExpenseRoutes(
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
-      log.fehler("ausgabe.aendern-fehlgeschlagen", e, {
-        ausgabeId: r.id,
-        gruppeId: r.gruppeId,
-      });
       throw e;
     }
     log.ereignis("ausgabe.geaendert", {
@@ -337,10 +329,6 @@ export function registerExpenseRoutes(
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
-      log.fehler("ausgabe.loeschen-fehlgeschlagen", e, {
-        ausgabeId: r.id,
-        gruppeId: r.gruppeId,
-      });
       throw e;
     }
     log.ereignis("ausgabe.geloescht", {

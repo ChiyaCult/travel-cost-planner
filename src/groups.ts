@@ -61,7 +61,6 @@ export function registerGroupRoutes(app: Hono<Env>, db: DatabaseSync) {
       return c.json({ id, name, mitglieder: mitglieder(db, id) }, 201);
     } catch (e) {
       db.exec("ROLLBACK");
-      log.fehler("gruppe.anlegen-fehlgeschlagen", e, { nutzerId: user.id });
       throw e;
     }
   });

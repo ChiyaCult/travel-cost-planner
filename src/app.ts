@@ -52,7 +52,7 @@ export function createApp(
 
   // Jeder unerwartete Fehler landet im Protokoll, der Aufrufer bekommt nur 500.
   app.onError((err, c) => {
-    log.fehler("anfrage.fehlgeschlagen", err, {
+    log.ausnahme("anfrage.fehlgeschlagen", err, {
       methode: c.req.method,
       pfad: c.req.path,
       nutzerId: c.get("user")?.id ?? null,

@@ -38,7 +38,7 @@ Deno.test("Ereignis: eine Zeile JSON auf stdout", () => {
   assertEquals(typeof zeit, "string");
 });
 
-Deno.test("Fehler: mit Grund auf stderr", () => {
+Deno.test("Fehler: Grund auf stderr, ohne Aufrufliste", () => {
   const { aus, fehler } = protokolliere(() =>
     log.fehler("kurs.nicht-abrufbar", new Error("kaputt"), {
       datum: "2026-01-02",
@@ -48,6 +48,16 @@ Deno.test("Fehler: mit Grund auf stderr", () => {
   const eintrag = JSON.parse(fehler[0]);
   assertEquals(eintrag.stufe, "fehler");
   assertEquals(eintrag.datum, "2026-01-02");
+  assertEquals(eintrag.grund, "Error: kaputt");
+  assertEquals(eintrag.stack, undefined);
+});
+
+Deno.test("Ausnahme: zusätzlich mit Aufrufliste", () => {
+  const { fehler } = protokolliere(() =>
+    log.ausnahme("anfrage.fehlgeschlagen", new Error("kaputt"), { pfad: "/x" })
+  );
+  const eintrag = JSON.parse(fehler[0]);
+  assertEquals(eintrag.pfad, "/x");
   assertEquals(eintrag.grund, "Error: kaputt");
   assertStringIncludes(eintrag.stack, "Error: kaputt");
 });
