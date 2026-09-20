@@ -37,6 +37,20 @@ Docker-Image bringt es mit. Für `deno task dev` außerhalb von Docker müssen
 `brew install tesseract tesseract-lang`). Fehlt es, bleibt das Formular normal
 nutzbar, nur ohne Vorschlag.
 
+## Protokoll (Logs)
+
+Die App schreibt je Eintrag eine Zeile JSON: Ereignisse (`stufe: "info"`) auf
+stdout, Fehler (`stufe: "fehler"`, mit `grund` und `stack`) auf stderr – zu
+lesen mit `docker compose logs`. Protokolliert werden fachliche Ereignisse
+(`nutzer.beigetreten`, `gruppe.angelegt`, `ausgabe.erfasst`, `schuld.beglichen`
+…) sowie jeder unerwartete Fehler einer Anfrage. Im Protokoll stehen nur Ids und
+Eckdaten (Beträge, Gruppe, Datum), **nie** Namen, Beschreibungen oder Belege.
+`LOG=aus` schaltet das Protokoll ab (nutzen die Tests).
+
+```bash
+docker compose logs -f | grep '"stufe":"fehler"'
+```
+
 ## Entwicklung und Tests
 
 ```bash

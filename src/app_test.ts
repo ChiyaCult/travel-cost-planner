@@ -1,4 +1,8 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
+
+// Tests laufen still; das Protokoll wird in log_test.ts eigens geprüft.
+Deno.env.set("LOG", "aus");
+
 import { createApp } from "./app.ts";
 import { CHALLENGES_MAX } from "./auth.ts";
 import { openDatabase } from "./db.ts";

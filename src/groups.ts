@@ -1,6 +1,7 @@
 import type { Hono } from "@hono/hono";
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
+import { log } from "./log.ts";
 
 export interface Mitglied {
   id: number;
@@ -56,9 +57,11 @@ export function registerGroupRoutes(app: Hono<Env>, db: DatabaseSync) {
       db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)")
         .run(id, user.id);
       db.exec("COMMIT");
+      log.ereignis("gruppe.angelegt", { gruppeId: id, nutzerId: user.id });
       return c.json({ id, name, mitglieder: mitglieder(db, id) }, 201);
     } catch (e) {
       db.exec("ROLLBACK");
+      log.fehler("gruppe.anlegen-fehlgeschlagen", e, { nutzerId: user.id });
       throw e;
     }
   });
@@ -104,6 +107,11 @@ export function registerGroupRoutes(app: Hono<Env>, db: DatabaseSync) {
     }
     db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (?, ?)")
       .run(id, nutzerId);
+    log.ereignis("mitglied.hinzugefuegt", {
+      gruppeId: id,
+      nutzerId,
+      durchNutzerId: user.id,
+    });
     return c.json({ id, mitglieder: mitglieder(db, id) }, 201);
   });
 }
