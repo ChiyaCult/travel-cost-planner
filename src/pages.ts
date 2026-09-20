@@ -693,7 +693,7 @@ function detailZeigen(x) {
       const datei = inp.files[0];
       if (!datei) return;
       try {
-        await api(beleg, { method: "PUT", headers: { "content-type": datei.type }, body: datei });
+        await belegSenden(beleg, await verkleinern(datei));
         meldung("Beleg gespeichert", false);
       } catch (err) { meldung("Beleg nicht gespeichert: " + err.message); }
       fertig();
@@ -795,10 +795,32 @@ async function laden() {
 }
 
 // Neue Ausgabe
+// Belegfotos vor dem Hochladen verkleinern: spart Speicher und Ladezeit,
+// ohne die Texterkennung zu verschlechtern (geprueft mit Beispielbelegen).
+const BELEG_KANTE = 1600;
+const BELEG_QUALITAET = 0.8;
+async function verkleinern(datei) {
+  try {
+    const bild = await createImageBitmap(datei);
+    const faktor = Math.min(1, BELEG_KANTE / Math.max(bild.width, bild.height));
+    const flaeche = document.createElement("canvas");
+    flaeche.width = Math.round(bild.width * faktor);
+    flaeche.height = Math.round(bild.height * faktor);
+    flaeche.getContext("2d").drawImage(bild, 0, 0, flaeche.width, flaeche.height);
+    bild.close();
+    const klein = await new Promise((fertig) => flaeche.toBlob(fertig, "image/jpeg", BELEG_QUALITAET));
+    // Bereits kleine oder gut gepackte Bilder bleiben, wie sie sind.
+    return klein && klein.size < datei.size ? klein : datei;
+  } catch { return datei; } // z. B. Format, das der Browser nicht dekodiert
+}
+const belegSenden = (ziel, bild) => api(ziel, { method: "PUT", headers: { "content-type": bild.type }, body: bild });
+
 const dlg = $("dlg-ausgabe");
 const form = $("ausgabeform");
+let belegBild = null;
 $("fab").onclick = () => {
   form.reset();
+  belegBild = null;
   form.elements.datum.value = new Date().toLocaleDateString("sv-SE");
   $("erkennung").textContent = "";
   dlg.showModal();
@@ -806,13 +828,15 @@ $("fab").onclick = () => {
 };
 $("abbrechen").onclick = () => dlg.close();
 form.elements.beleg.onchange = async () => {
-  const bild = form.elements.beleg.files[0];
+  const datei = form.elements.beleg.files[0];
   const status = $("erkennung");
   status.textContent = "";
-  if (!bild) return;
+  belegBild = null;
+  if (!datei) return;
   status.textContent = "Summe wird gelesen …";
   try {
-    const { summeYen } = await api("/api/erkennung/summe", { method: "POST", headers: { "content-type": bild.type }, body: bild });
+    belegBild = await verkleinern(datei);
+    const { summeYen } = await api("/api/erkennung/summe", { method: "POST", headers: { "content-type": belegBild.type }, body: belegBild });
     if (summeYen && !form.elements.betrag.value) {
       form.elements.betrag.value = summeYen;
       form.elements.waehrung.value = "JPY";
@@ -831,11 +855,11 @@ form.onsubmit = async (e) => {
   else body.betragCent = Math.round(zahl * 100);
   if (f.get("datum")) body.datum = f.get("datum");
   body.teilnehmerIds = f.getAll("teilnehmer").map(Number);
-  const beleg = f.get("beleg");
+  const beleg = belegBild ?? f.get("beleg");
   try {
     const neu = await post(url("/ausgaben"), body);
     if (beleg && beleg.size) {
-      try { await api(url("/ausgaben/" + neu.id + "/beleg"), { method: "PUT", headers: { "content-type": beleg.type }, body: beleg }); }
+      try { await belegSenden(url("/ausgaben/" + neu.id + "/beleg"), beleg); }
       catch (err) { meldung("Ausgabe gespeichert, Beleg nicht: " + err.message); }
     }
     dlg.close();

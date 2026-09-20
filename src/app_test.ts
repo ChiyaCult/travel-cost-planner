@@ -1049,6 +1049,26 @@ Deno.test("Eigenen Namen ändern: PATCH /api/me", async () => {
   assertEquals(me.name, "Chiya");
 });
 
+Deno.test("Gruppenseite verkleinert Belegfotos vor dem Hochladen", async () => {
+  const { app, db } = frischeApp();
+  const { userId } = createTestSession(db, { name: "Anna" });
+  db.prepare("INSERT INTO groups (id, name, created_by) VALUES (1, 'Japan', ?)")
+    .run(userId);
+  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (1, ?)")
+    .run(userId);
+  const { headers } = createTestSession(db, { name: "Anna" });
+  db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (1, ?)")
+    .run(userId + 1);
+  const html = await (await app.request("/gruppen/1", { headers })).text();
+  // Verkleinert wird bei der Auswahl im Formular und beim Ersetzen; das
+  // Speichern nimmt das dabei erzeugte Bild (Definition + 2 Aufrufe).
+  assertStringIncludes(html, "BELEG_KANTE = 1600");
+  assertStringIncludes(html, "belegBild = await verkleinern(datei)");
+  assertStringIncludes(html, "belegSenden(beleg, await verkleinern(datei))");
+  assertStringIncludes(html, 'const beleg = belegBild ?? f.get("beleg")');
+  assertEquals(html.split("verkleinern(").length - 1, 3);
+});
+
 Deno.test("Sitzung läuft nach 30 Tagen auch serverseitig ab", async () => {
   const { app, db } = frischeApp();
   const { headers } = createTestSession(db);
