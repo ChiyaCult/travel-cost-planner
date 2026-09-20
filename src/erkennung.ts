@@ -1,3 +1,4 @@
+import { log } from "./log.ts";
 import { waehleSumme } from "./summe.ts";
 
 /** Grenze zur lokalen Texterkennung; Tests setzen einen Fake ein. */
@@ -33,7 +34,10 @@ export async function erkenneSumme(
 ): Promise<number | null> {
   try {
     return waehleSumme(await erkennung.lies(bild));
-  } catch {
+  } catch (e) {
+    // Der Nutzer sieht nur "kein Vorschlag"; der Betreiber soll den Grund sehen
+    // (z. B. fehlendes Tesseract oder Zeitüberschreitung).
+    log.fehler("erkennung.fehlgeschlagen", e, { bytes: bild.length });
     return null;
   }
 }

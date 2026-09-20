@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
 import type { Kursdienst } from "./kurs.ts";
 import { istMitglied, mitglieder } from "./groups.ts";
+import { log } from "./log.ts";
 
 /** Gleichmäßig in ganzen Cent; der Restcent geht einzeln an die ersten Mitglieder. */
 export function teile(betragCent: number, anzahl: number): number[] {
@@ -158,6 +159,14 @@ export function registerExpenseRoutes(
       );
       betroffene.forEach((m, i) => ins.run(id, m.id, anteile[i]));
       db.exec("COMMIT");
+      log.ereignis("ausgabe.erfasst", {
+        ausgabeId: id,
+        gruppeId,
+        zahlerId: user.id,
+        betragCent,
+        waehrung: yen === null ? "EUR" : "JPY",
+        beteiligte: betroffene.length,
+      });
       return c.json({
         id,
         zahler: { id: user.id, name: user.name },
@@ -230,6 +239,14 @@ export function registerExpenseRoutes(
       db.exec("ROLLBACK");
       throw e;
     }
+    log.ereignis("ausgabe.geaendert", {
+      ausgabeId: r.id,
+      gruppeId: r.gruppeId,
+      zahlerId: r.user.id,
+      betragCent,
+      waehrung: yen === null ? "EUR" : "JPY",
+      beteiligte: betroffene.length,
+    });
     return c.json({
       id: r.id,
       zahler: { id: r.user.id, name: r.user.name },
@@ -256,6 +273,13 @@ export function registerExpenseRoutes(
     db.prepare(
       "INSERT OR REPLACE INTO receipts (expense_id, mime, data) VALUES (?, ?, ?)",
     ).run(r.id, mime, daten);
+    log.ereignis("beleg.hochgeladen", {
+      ausgabeId: r.id,
+      gruppeId: r.gruppeId,
+      nutzerId: r.user.id,
+      bytes: daten.length,
+      typ: mime,
+    });
     return c.body(null, 204);
   });
 
@@ -266,6 +290,11 @@ export function registerExpenseRoutes(
       .prepare("DELETE FROM receipts WHERE expense_id = ?")
       .run(r.id);
     if (changes === 0) return c.json({ fehler: "Beleg nicht gefunden" }, 404);
+    log.ereignis("beleg.geloescht", {
+      ausgabeId: r.id,
+      gruppeId: r.gruppeId,
+      nutzerId: r.user.id,
+    });
     return c.body(null, 204);
   });
 
@@ -302,6 +331,11 @@ export function registerExpenseRoutes(
       db.exec("ROLLBACK");
       throw e;
     }
+    log.ereignis("ausgabe.geloescht", {
+      ausgabeId: r.id,
+      gruppeId: r.gruppeId,
+      zahlerId: r.user.id,
+    });
     return c.body(null, 204);
   });
 
@@ -481,6 +515,13 @@ export function registerExpenseRoutes(
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(gruppeId, user.id, e.anId, e.betragCent, e.datum);
+    log.ereignis("schuld.beglichen", {
+      begleichungId: Number(lastInsertRowid),
+      gruppeId,
+      vonId: user.id,
+      anId: e.anId,
+      betragCent: e.betragCent,
+    });
     return c.json(zeigeBegleichung(gruppeId, Number(lastInsertRowid)), 201);
   });
 
@@ -517,6 +558,13 @@ export function registerExpenseRoutes(
     db.prepare(
       "UPDATE settlements SET to_id = ?, amount_cents = ?, date = ? WHERE id = ?",
     ).run(e.anId, e.betragCent, e.datum, r.id);
+    log.ereignis("begleichung.geaendert", {
+      begleichungId: r.id,
+      gruppeId: r.gruppeId,
+      vonId: r.user.id,
+      anId: e.anId,
+      betragCent: e.betragCent,
+    });
     return c.json(zeigeBegleichung(r.gruppeId, r.id));
   });
 
@@ -524,6 +572,11 @@ export function registerExpenseRoutes(
     const r = eigeneBegleichung(c);
     if (r.antwort) return r.antwort;
     db.prepare("DELETE FROM settlements WHERE id = ?").run(r.id);
+    log.ereignis("begleichung.zurueckgenommen", {
+      begleichungId: r.id,
+      gruppeId: r.gruppeId,
+      vonId: r.user.id,
+    });
     return c.body(null, 204);
   });
 

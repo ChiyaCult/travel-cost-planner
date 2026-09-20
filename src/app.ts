@@ -10,6 +10,7 @@ import { BELEG_MAX, BELEG_TYPEN, registerExpenseRoutes } from "./expenses.ts";
 import { istMitglied, registerGroupRoutes } from "./groups.ts";
 import { erkenneSumme, tesseract, type Texterkennung } from "./erkennung.ts";
 import { frankfurter, type Kursdienst } from "./kurs.ts";
+import { log } from "./log.ts";
 import {
   anmeldeseite,
   gruppenseite,
@@ -48,6 +49,16 @@ export function createApp(
   erkennung: Texterkennung = tesseract,
 ): Hono<Env> {
   const app = new Hono<Env>();
+
+  // Jeder unerwartete Fehler landet im Protokoll, der Aufrufer bekommt nur 500.
+  app.onError((err, c) => {
+    log.ausnahme("anfrage.fehlgeschlagen", err, {
+      methode: c.req.method,
+      pfad: c.req.path,
+      nutzerId: c.get("user")?.id ?? null,
+    });
+    return c.json({ fehler: "Unerwarteter Fehler" }, 500);
+  });
 
   // Inline-Skripte laufen nur mit dem Nonce der jeweiligen Antwort.
   app.use(
@@ -118,11 +129,18 @@ export function createApp(
       return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
     }
     if (erkennungLaeuft >= ERKENNUNG_PARALLEL) {
+      log.ereignis("erkennung.ausgelastet", { nutzerId: c.get("user")!.id });
       return c.json({ fehler: "Texterkennung ist gerade ausgelastet" }, 429);
     }
     erkennungLaeuft++;
     try {
-      return c.json({ summeYen: await erkenneSumme(erkennung, bild) });
+      const summeYen = await erkenneSumme(erkennung, bild);
+      log.ereignis("erkennung.gelaufen", {
+        nutzerId: c.get("user")!.id,
+        bytes: bild.length,
+        erkannt: summeYen !== null,
+      });
+      return c.json({ summeYen });
     } finally {
       erkennungLaeuft--;
     }
@@ -189,6 +207,7 @@ export function createApp(
     if (!name) return c.json({ fehler: "Name fehlt" }, 400);
     if (name.length > 60) return c.json({ fehler: "Name ist zu lang" }, 400);
     db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, user.id);
+    log.ereignis("nutzer.umbenannt", { nutzerId: user.id });
     return c.json({ id: user.id, name });
   });
 
