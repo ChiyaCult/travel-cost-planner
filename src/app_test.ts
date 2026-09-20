@@ -308,6 +308,11 @@ Deno.test("Ausgabe zu zweit: Zahler zählt mit, Gegenüber schuldet die Hälfte"
   assertEquals(liste[0].betragCent, 1001);
   assertEquals(liste[0].datum, "2026-05-01");
   assertEquals(liste[0].beschreibung, "Essen");
+  // Die Detailansicht zeigt, auf wen aufgeteilt wurde.
+  assertEquals(liste[0].beteiligte, [
+    { id: anna.userId, name: "Anna", anteilCent: 501 },
+    { id: ben.userId, name: "Ben", anteilCent: 500 },
+  ]);
 });
 
 Deno.test("Ausgabe zu dritt: 1000 Cent, Restcent in Beitrittsreihenfolge", async () => {
