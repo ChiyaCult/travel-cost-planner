@@ -2,6 +2,8 @@ import { Hono } from "@hono/hono";
 import { SYMBOLE } from "./symbole.ts";
 import { SCHRIFTEN } from "./schriften.ts";
 import { getCookie } from "@hono/hono/cookie";
+import { bodyLimit } from "@hono/hono/body-limit";
+import { NONCE, secureHeaders } from "@hono/hono/secure-headers";
 import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
 import { BELEG_MAX, BELEG_TYPEN, registerExpenseRoutes } from "./expenses.ts";
@@ -11,11 +13,18 @@ import { frankfurter, type Kursdienst } from "./kurs.ts";
 import {
   anmeldeseite,
   gruppenseite,
+  mitNonce,
   profilseite,
   startseite,
 } from "./pages.ts";
 
 export const SESSION_COOKIE = "session";
+/** Sitzungen enden nach dieser Zeit, auch serverseitig (nicht nur das Cookie). */
+export const SITZUNG_GUELTIG_S = 30 * 24 * 3600;
+/** JSON-Anfragen sind klein; nur Belegfotos dürfen groß sein. */
+const ANFRAGE_MAX = 64 * 1024;
+/** Höchstens so viele Texterkennungen gleichzeitig (Tesseract ist CPU-hungrig). */
+const ERKENNUNG_PARALLEL = 2;
 
 export interface Config {
   /** Feste Domain; Passkeys sind an sie gebunden. */
@@ -40,14 +49,52 @@ export function createApp(
 ): Hono<Env> {
   const app = new Hono<Env>();
 
+  // Inline-Skripte laufen nur mit dem Nonce der jeweiligen Antwort.
+  app.use(
+    "*",
+    secureHeaders({
+      xFrameOptions: "DENY",
+      contentSecurityPolicy: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [NONCE],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+    }),
+  );
+
+  // Größe vor dem Einlesen begrenzen; Belegfotos (Upload, Erkennung) bis BELEG_MAX.
+  const zuGross = bodyLimit({
+    maxSize: ANFRAGE_MAX,
+    onError: (c) => c.json({ fehler: "Anfrage ist zu groß" }, 413),
+  });
+  const belegZuGross = bodyLimit({
+    maxSize: BELEG_MAX,
+    onError: (c) => c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413),
+  });
+  app.use(
+    "*",
+    (c, next) =>
+      c.req.path === "/api/erkennung/summe" || c.req.path.endsWith("/beleg")
+        ? belegZuGross(c, next)
+        : zuGross(c, next),
+  );
+
   app.use("*", async (c, next) => {
     const sessionId = getCookie(c, SESSION_COOKIE);
     const user = sessionId
       ? (db
         .prepare(
-          "SELECT u.id, u.name, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?",
+          `SELECT u.id, u.name, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.id = ? AND s.created_at > datetime('now', ?)`,
         )
-        .get(sessionId) as SessionUser | undefined) ?? null
+        .get(sessionId, `-${SITZUNG_GUELTIG_S} seconds`) as
+          | SessionUser
+          | undefined) ?? null
       : null;
     c.set("user", user);
     await next();
@@ -58,6 +105,7 @@ export function createApp(
   registerExpenseRoutes(app, db, kursdienst);
 
   // Summenvorschlag für ein Foto vor dem Speichern; das Foto bleibt auf dem Server.
+  let erkennungLaeuft = 0;
   app.post("/api/erkennung/summe", async (c) => {
     if (!c.get("user")) return c.json({ fehler: "Nicht angemeldet" }, 401);
     const mime = (c.req.header("content-type") ?? "").split(";")[0].trim();
@@ -69,7 +117,15 @@ export function createApp(
     if (bild.length > BELEG_MAX) {
       return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
     }
-    return c.json({ summeYen: await erkenneSumme(erkennung, bild) });
+    if (erkennungLaeuft >= ERKENNUNG_PARALLEL) {
+      return c.json({ fehler: "Texterkennung ist gerade ausgelastet" }, 429);
+    }
+    erkennungLaeuft++;
+    try {
+      return c.json({ summeYen: await erkenneSumme(erkennung, bild) });
+    } finally {
+      erkennungLaeuft--;
+    }
   });
 
   app.get("/manifest.webmanifest", (c) =>
@@ -122,7 +178,7 @@ export function createApp(
     if (!user) return c.redirect("/");
     const id = Number(c.req.param("id"));
     if (!istMitglied(db, id, user.id)) return c.redirect("/");
-    return c.html(gruppenseite(id));
+    return c.html(mitNonce(gruppenseite(id), c));
   });
 
   app.patch("/api/me", async (c) => {
@@ -138,8 +194,8 @@ export function createApp(
 
   app.get("/", (c) => {
     const user = c.get("user");
-    if (!user) return c.html(anmeldeseite(config.domain));
-    return c.html(startseite(user));
+    if (!user) return c.html(mitNonce(anmeldeseite(config.domain), c));
+    return c.html(mitNonce(startseite(user), c));
   });
 
   app.get("/profil", (c) => {
@@ -151,7 +207,7 @@ export function createApp(
         name: string;
       }[]
       : [];
-    return c.html(profilseite(user, nutzer));
+    return c.html(mitNonce(profilseite(user, nutzer), c));
   });
 
   app.get("/api/health", (c) => c.json({ ok: true }));

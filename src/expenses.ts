@@ -329,12 +329,38 @@ export function registerExpenseRoutes(
         zahlerName: string;
         hatBeleg: number;
       }[];
+    // Anteile aller Ausgaben auf einmal, damit die Detailansicht sie zeigen kann.
+    const anteilszeilen = db
+      .prepare(
+        `SELECT s.expense_id AS ausgabeId, s.share_cents AS anteilCent,
+                u.id AS nutzerId, u.name AS name
+         FROM expense_shares s
+         JOIN expenses e ON e.id = s.expense_id
+         JOIN users u ON u.id = s.user_id
+         WHERE e.group_id = ? ORDER BY s.rowid`,
+      )
+      .all(gruppeId) as unknown as {
+        ausgabeId: number;
+        anteilCent: number;
+        nutzerId: number;
+        name: string;
+      }[];
+    const anteileJeAusgabe = new Map<
+      number,
+      { id: number; name: string; anteilCent: number }[]
+    >();
+    for (const a of anteilszeilen) {
+      const liste = anteileJeAusgabe.get(a.ausgabeId) ?? [];
+      liste.push({ id: a.nutzerId, name: a.name, anteilCent: a.anteilCent });
+      anteileJeAusgabe.set(a.ausgabeId, liste);
+    }
     return c.json(
       zeilen.map(({ zahlerId, zahlerName, yen, kurs, hatBeleg, ...rest }) => ({
         ...rest,
         hatBeleg: hatBeleg === 1,
         ...waehrungsfelder(yen, kurs),
         zahler: { id: zahlerId, name: zahlerName },
+        beteiligte: anteileJeAusgabe.get(rest.id) ?? [],
       })),
     );
   });
