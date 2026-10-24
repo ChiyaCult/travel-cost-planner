@@ -14,6 +14,7 @@ import type {
 } from "@simplewebauthn/server";
 import { SESSION_COOKIE, SITZUNG_GUELTIG_S } from "./app.ts";
 import type { Config, Env } from "./app.ts";
+import { log } from "./log.ts";
 import { einladungsseite, mitNonce, ungueltigeEinladung } from "./pages.ts";
 
 const EINLADUNG_GUELTIG_MS = 7 * 24 * 3600 * 1000;
@@ -40,6 +41,10 @@ export function createInvite(
     "INSERT INTO invites (token, user_id, expires_at) VALUES (?, ?, ?)",
   )
     .run(token, userId, Date.now() + EINLADUNG_GUELTIG_MS);
+  log.ereignis("einladung.erstellt", {
+    nutzerId: userId,
+    neuerNutzer: !("userId" in target),
+  });
   return token;
 }
 
@@ -130,6 +135,7 @@ export function registerAuthRoutes(
       sessionId,
       userId,
     );
+    log.ereignis("sitzung.gestartet", { nutzerId: userId });
     setCookie(c, SESSION_COOKIE, sessionId, {
       httpOnly: true,
       secure,
@@ -240,10 +246,12 @@ export function registerAuthRoutes(
         expectedOrigin: config.origin,
         expectedRPID: rpID,
       });
-    } catch {
+    } catch (e) {
+      log.fehler("registrierung.abgelehnt", e, { nutzerId: invite.user_id });
       return c.json({ fehler: "Passkey konnte nicht geprüft werden" }, 400);
     }
     if (!verification.verified) {
+      log.ereignis("registrierung.abgelehnt", { nutzerId: invite.user_id });
       return c.json({ fehler: "Passkey abgelehnt" }, 400);
     }
 
@@ -267,6 +275,12 @@ export function registerAuthRoutes(
       credential.counter,
       JSON.stringify(credential.transports ?? []),
     );
+    log.ereignis("nutzer.beigetreten", {
+      nutzerId: invite.user_id,
+      passkeys: (db.prepare(
+        "SELECT COUNT(*) AS n FROM credentials WHERE user_id = ?",
+      ).get(invite.user_id) as { n: number }).n,
+    });
     startSession(c, invite.user_id);
     return c.json({ ok: true });
   });
@@ -306,7 +320,10 @@ export function registerAuthRoutes(
           transports: string | null;
         }
         | undefined;
-    if (!cred) return c.json({ fehler: "Unbekannter Passkey" }, 401);
+    if (!cred) {
+      log.ereignis("anmeldung.abgelehnt", { grund: "unbekannter Passkey" });
+      return c.json({ fehler: "Unbekannter Passkey" }, 401);
+    }
 
     let verification;
     try {
@@ -324,10 +341,15 @@ export function registerAuthRoutes(
             : undefined,
         },
       });
-    } catch {
+    } catch (e) {
+      log.fehler("anmeldung.abgelehnt", e, { nutzerId: cred.user_id });
       return c.json({ fehler: "Anmeldung abgelehnt" }, 401);
     }
     if (!verification.verified) {
+      log.ereignis("anmeldung.abgelehnt", {
+        nutzerId: cred.user_id,
+        grund: "Passkey nicht bestätigt",
+      });
       return c.json({ fehler: "Anmeldung abgelehnt" }, 401);
     }
 
@@ -344,6 +366,7 @@ export function registerAuthRoutes(
         new RegExp(`${SESSION_COOKIE}=([^;]+)`),
       )?.[1];
       if (sid) db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
+      log.ereignis("abmeldung", { nutzerId: user.id });
     }
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });

@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   description TEXT NOT NULL,
   date TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  -- Yen-Ausgaben: original_yen und exchange_rate (Euro pro Yen) sind fest; amount_cents ist immer Euro.
+  -- Fremdwährung (JPY, TWD): original_currency, original_amount und exchange_rate (Euro pro Einheit) sind fest; amount_cents ist immer Euro.
 );
 CREATE TABLE IF NOT EXISTS expense_shares (
   expense_id INTEGER NOT NULL REFERENCES expenses(id),
@@ -93,6 +93,14 @@ export function openDatabase(path: string): DatabaseSync {
   if (!spalten.some((s) => s.name === "exchange_rate")) {
     db.exec(
       "ALTER TABLE expenses ADD COLUMN original_yen INTEGER; ALTER TABLE expenses ADD COLUMN exchange_rate REAL;",
+    );
+  }
+  // Bis hierhin gab es nur Yen; bestehende Fremdbeträge sind also JPY.
+  if (!spalten.some((s) => s.name === "original_currency")) {
+    db.exec(
+      `ALTER TABLE expenses RENAME COLUMN original_yen TO original_amount;
+       ALTER TABLE expenses ADD COLUMN original_currency TEXT;
+       UPDATE expenses SET original_currency = 'JPY' WHERE original_amount IS NOT NULL;`,
     );
   }
   return db;

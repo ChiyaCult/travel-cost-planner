@@ -1,17 +1,22 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
+
+// Tests laufen still; das Protokoll wird in log_test.ts eigens geprüft.
+Deno.env.set("LOG", "aus");
+
 import { createApp } from "./app.ts";
 import { CHALLENGES_MAX } from "./auth.ts";
+import { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "./db.ts";
 import { createTestSession } from "./testing.ts";
 
-/** Fake-Kursdienst: Kurs pro Datum steuerbar, zählt Abrufe. */
+/** Fake-Kursdienst: Kurs pro Datum steuerbar (Schlüssel "Datum" für JPY, "TWD:Datum" sonst), zählt Abrufe. */
 function fakeKurs(kurse: Record<string, number> = {}) {
   const dienst = {
     abrufe: 0,
     kurse,
-    yenInEuro(datum: string): Promise<number> {
+    inEuro(waehrung: string, datum: string): Promise<number> {
       dienst.abrufe++;
-      const k = dienst.kurse[datum];
+      const k = dienst.kurse[waehrung === "JPY" ? datum : `${waehrung}:${datum}`];
       return k === undefined
         ? Promise.reject(new Error("kein Kurs"))
         : Promise.resolve(k);
@@ -715,7 +720,7 @@ Deno.test("Yen-Ausgabe: Tageskurs wird geholt, gespeichert und bleibt fix", asyn
   ]);
   const res = await ausgabe(app, id, anna.headers, {
     waehrung: "JPY",
-    betragYen: 5001,
+    betragFremd: 5001,
     beschreibung: "Ramen",
     datum: "2026-05-01",
   });
@@ -731,7 +736,7 @@ Deno.test("Yen-Ausgabe: Tageskurs wird geholt, gespeichert und bleibt fix", asyn
     headers: ben.headers,
   })).json();
   assertEquals(liste[0].waehrung, "JPY");
-  assertEquals(liste[0].betragYen, 5001);
+  assertEquals(liste[0].betragFremd, 5001);
   assertEquals(liste[0].kurs, 0.0061);
   // Ändern (ohne Kurs) behält den gespeicherten Kurs und ruft nicht neu ab.
   const abrufe = kurs.abrufe;
@@ -740,7 +745,7 @@ Deno.test("Yen-Ausgabe: Tageskurs wird geholt, gespeichert und bleibt fix", asyn
     headers: { ...anna.headers, "content-type": "application/json" },
     body: JSON.stringify({
       waehrung: "JPY",
-      betragYen: 10000,
+      betragFremd: 10000,
       beschreibung: "Ramen",
       datum: "2026-05-01",
     }),
@@ -752,13 +757,88 @@ Deno.test("Yen-Ausgabe: Tageskurs wird geholt, gespeichert und bleibt fix", asyn
   assertEquals(kurs.abrufe, abrufe);
 });
 
+Deno.test("TWD-Ausgabe: Kurs wird geholt; Währungswechsel holt neuen Kurs", async () => {
+  const { app, db, kurs } = frischeApp(
+    fakeKurs({ "TWD:2026-05-01": 0.0274, "2026-05-01": 0.0061 }),
+  );
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const res = await ausgabe(app, id, anna.headers, {
+    waehrung: "TWD",
+    betragFremd: 1000,
+    beschreibung: "Nachtmarkt",
+    datum: "2026-05-01",
+  });
+  assertEquals(res.status, 201);
+  const neu = await res.json();
+  // 1000 * 0,0274 = 27,40 €
+  assertEquals(neu.betragCent, 2740);
+  assertEquals(neu.waehrung, "TWD");
+  assertEquals(neu.betragFremd, 1000);
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 1370]]);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste[0].waehrung, "TWD");
+  assertEquals(liste[0].betragFremd, 1000);
+  assertEquals(liste[0].kurs, 0.0274);
+  // Wechsel auf Yen: der TWD-Kurs darf nicht weiterverwendet werden.
+  const abrufe = kurs.abrufe;
+  const put = await app.request(`/api/gruppen/${id}/ausgaben/${neu.id}`, {
+    method: "PUT",
+    headers: { ...anna.headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      waehrung: "JPY",
+      betragFremd: 1000,
+      beschreibung: "Nachtmarkt",
+      datum: "2026-05-01",
+    }),
+  });
+  assertEquals(put.status, 200);
+  const geaendert = await put.json();
+  assertEquals(geaendert.kurs, 0.0061);
+  assertEquals(geaendert.betragCent, 610);
+  assertEquals(kurs.abrufe, abrufe + 1);
+});
+
+Deno.test("Migration: bestehende Yen-Ausgaben bekommen die Währung JPY", () => {
+  const pfad = Deno.makeTempFileSync({ suffix: ".db" });
+  try {
+    const alt = new DatabaseSync(pfad);
+    alt.exec(`CREATE TABLE expenses (
+      id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, payer_id INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL, description TEXT NOT NULL, date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      original_yen INTEGER, exchange_rate REAL);
+      INSERT INTO expenses (group_id, payer_id, amount_cents, description, date, original_yen, exchange_rate)
+      VALUES (1, 1, 610, 'Ramen', '2026-05-01', 1000, 0.0061), (1, 1, 500, 'Kaffee', '2026-05-01', NULL, NULL);`);
+    alt.close();
+    const db = openDatabase(pfad);
+    assertEquals(
+      db.prepare(
+        "SELECT original_currency AS w, original_amount AS b FROM expenses ORDER BY id",
+      ).all().map((z) => ({ ...z })),
+      [{ w: "JPY", b: 1000 }, { w: null, b: null }],
+    );
+    db.close();
+  } finally {
+    for (const endung of ["", "-wal", "-shm"]) {
+      try {
+        Deno.removeSync(pfad + endung);
+      } catch { /* schon weg */ }
+    }
+  }
+});
+
 Deno.test("Yen-Ausgabe: Kurs manuell überschreiben, fehlender Kurs, Validierung", async () => {
   const { app, db, kurs } = frischeApp();
   const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna", "Ben"]);
   const yen = { waehrung: "JPY", beschreibung: "Zug", datum: "2026-05-02" };
   const ok = await ausgabe(app, id, anna.headers, {
     ...yen,
-    betragYen: 1000,
+    betragFremd: 1000,
     kurs: 0.007,
   });
   assertEquals(ok.status, 201);
@@ -766,15 +846,15 @@ Deno.test("Yen-Ausgabe: Kurs manuell überschreiben, fehlender Kurs, Validierung
   assertEquals(kurs.abrufe, 0);
   // Kein Kurs verfügbar und keiner angegeben: 502.
   assertEquals(
-    (await ausgabe(app, id, anna.headers, { ...yen, betragYen: 1000 })).status,
+    (await ausgabe(app, id, anna.headers, { ...yen, betragFremd: 1000 })).status,
     502,
   );
   for (
     const kaputt of [
-      { betragYen: 0 },
-      { betragYen: 10.5 },
-      { betragYen: 1000, kurs: -1 },
-      { betragYen: 1000, kurs: "x" },
+      { betragFremd: 0 },
+      { betragFremd: 10.5 },
+      { betragFremd: 1000, kurs: -1 },
+      { betragFremd: 1000, kurs: "x" },
       { betragCent: 1000 },
     ]
   ) {
