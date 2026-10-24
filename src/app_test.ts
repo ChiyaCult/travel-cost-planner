@@ -16,7 +16,8 @@ function fakeKurs(kurse: Record<string, number> = {}) {
     kurse,
     inEuro(waehrung: string, datum: string): Promise<number> {
       dienst.abrufe++;
-      const k = dienst.kurse[waehrung === "JPY" ? datum : `${waehrung}:${datum}`];
+      const k =
+        dienst.kurse[waehrung === "JPY" ? datum : `${waehrung}:${datum}`];
       return k === undefined
         ? Promise.reject(new Error("kein Kurs"))
         : Promise.resolve(k);
@@ -846,7 +847,8 @@ Deno.test("Yen-Ausgabe: Kurs manuell überschreiben, fehlender Kurs, Validierung
   assertEquals(kurs.abrufe, 0);
   // Kein Kurs verfügbar und keiner angegeben: 502.
   assertEquals(
-    (await ausgabe(app, id, anna.headers, { ...yen, betragFremd: 1000 })).status,
+    (await ausgabe(app, id, anna.headers, { ...yen, betragFremd: 1000 }))
+      .status,
     502,
   );
   for (
@@ -888,6 +890,99 @@ const belegHoch = (
     headers: { ...headers, "content-type": typ },
     body: daten as Uint8Array<ArrayBuffer>,
   });
+
+Deno.test("Ausgabe aus Positionen: Betrag mit anteiliger Steuer, Positionen für alle sichtbar", async () => {
+  const { app, db } = frischeApp(fakeKurs({ "2026-05-01": 0.006 }));
+  const { id, sessions: [anna, ben] } = await gruppeMit(app, db, [
+    "Anna",
+    "Ben",
+  ]);
+  const res = await ausgabe(app, id, anna.headers, {
+    waehrung: "JPY",
+    positionen: [
+      { bezeichnung: "お茶", betragYen: 400 },
+      { bezeichnung: "弁当", betragYen: 600 },
+    ],
+    // Rechnung: 2.000 ¥ Positionen + 外税 = 2.160 ¥
+    allePositionenYen: 2000,
+    rechnungssummeYen: 2160,
+    teilnehmerIds: [ben.userId],
+    datum: "2026-05-01",
+  });
+  assertEquals(res.status, 201);
+  const neu = await res.json();
+  // 1.000 ¥ × 1,08 = 1.080 ¥ × 0,006 = 6,48 €
+  assertEquals(neu.betragFremd, 1080);
+  assertEquals(neu.betragCent, 648);
+  assertEquals(neu.beschreibung, "");
+  assertEquals(await schulden(app, id, ben.headers), [["Ben", "Anna", 648]]);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: ben.headers,
+  })).json();
+  assertEquals(liste[0].positionen, [
+    { bezeichnung: "お茶", betragYen: 400 },
+    { bezeichnung: "弁当", betragYen: 600 },
+  ]);
+});
+
+Deno.test("Ausgabe aus Positionen: ungültige Positionen werden abgelehnt", async () => {
+  const { app, db } = frischeApp(fakeKurs({ "2026-05-01": 0.006 }));
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna", "Ben"]);
+  const gueltig = {
+    waehrung: "JPY",
+    positionen: [{ bezeichnung: "お茶", betragYen: 400 }],
+    allePositionenYen: 1000,
+    rechnungssummeYen: 1080,
+    datum: "2026-05-01",
+  };
+  for (
+    const falsch of [
+      { waehrung: "EUR" },
+      { positionen: [] },
+      { positionen: [{ bezeichnung: " ", betragYen: 400 }] },
+      { positionen: [{ bezeichnung: "お茶", betragYen: 0 }] },
+      // Auswahl größer als alle Positionen zusammen
+      { allePositionenYen: 300 },
+      { rechnungssummeYen: undefined },
+    ]
+  ) {
+    const res = await ausgabe(app, id, anna.headers, { ...gueltig, ...falsch });
+    assertEquals(res.status, 400, JSON.stringify(falsch));
+    assertEquals((await res.json()).fehler, "Positionen ungültig");
+  }
+  assertEquals((await ausgabe(app, id, anna.headers, gueltig)).status, 201);
+});
+
+Deno.test("Ausgabe aus Positionen: nicht änderbar, aber löschbar", async () => {
+  const { app, db } = frischeApp(fakeKurs({ "2026-05-01": 0.006 }));
+  const { id, sessions: [anna] } = await gruppeMit(app, db, ["Anna", "Ben"]);
+  const neu = await (await ausgabe(app, id, anna.headers, {
+    waehrung: "JPY",
+    positionen: [{ bezeichnung: "お茶", betragYen: 400 }],
+    allePositionenYen: 400,
+    rechnungssummeYen: 400,
+    datum: "2026-05-01",
+  })).json();
+  const pfad = `/api/gruppen/${id}/ausgaben/${neu.id}`;
+  const put = await app.request(pfad, {
+    ...json(anna.headers, {
+      waehrung: "JPY",
+      betragFremd: 999,
+      beschreibung: "Tee",
+    }),
+    method: "PUT",
+  });
+  assertEquals(put.status, 409);
+  const del = await app.request(pfad, {
+    method: "DELETE",
+    headers: anna.headers,
+  });
+  assertEquals(del.status, 204);
+  const liste = await (await app.request(`/api/gruppen/${id}/ausgaben`, {
+    headers: anna.headers,
+  })).json();
+  assertEquals(liste, []);
+});
 
 Deno.test("Beleg: Zahler lädt hoch, alle Mitglieder rufen ihn ab", async () => {
   const { app, db } = frischeApp();
@@ -1078,6 +1173,59 @@ Deno.test("Summenvorschlag: Fehler der Erkennung ergibt null statt Fehlerseite",
   });
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { summeYen: null });
+});
+
+Deno.test("Positionsvorschlag: Summe und Positionen aus einer Erkennung", async () => {
+  const db = openDatabase(":memory:");
+  let gelesen = 0;
+  const app = createApp(
+    db,
+    { domain: "ausgaben.example.de", origin: "https://ausgaben.example.de" },
+    fakeKurs(),
+    {
+      lies: () => {
+        gelesen++;
+        return Promise.resolve(
+          "お茶 ¥150\n弁当 ¥500\n合計 ¥650\nお預り ¥1,000",
+        );
+      },
+    },
+  );
+  const { headers } = createTestSession(db, { name: "Anna" });
+  const senden = (h: Record<string, string>, typ = "image/jpeg") =>
+    app.request("/api/erkennung/positionen", {
+      method: "POST",
+      headers: { ...h, "content-type": typ },
+      body: new Uint8Array([1, 2, 3]),
+    });
+  assertEquals((await senden({})).status, 401);
+  assertEquals((await senden(headers, "text/plain")).status, 400);
+  assertEquals(await (await senden(headers)).json(), {
+    summeYen: 650,
+    positionen: [
+      { bezeichnung: "お茶", betragYen: 150 },
+      { bezeichnung: "弁当", betragYen: 500 },
+    ],
+  });
+  assertEquals(gelesen, 1);
+});
+
+Deno.test("Positionsvorschlag: Fehler der Erkennung ergibt leere Liste", async () => {
+  const db = openDatabase(":memory:");
+  const app = createApp(
+    db,
+    { domain: "ausgaben.example.de", origin: "https://ausgaben.example.de" },
+    fakeKurs(),
+    { lies: () => Promise.reject(new Error("Zeitlimit")) },
+  );
+  const { headers } = createTestSession(db, { name: "Anna" });
+  const res = await app.request("/api/erkennung/positionen", {
+    method: "POST",
+    headers: { ...headers, "content-type": "image/jpeg" },
+    body: new Uint8Array([1]),
+  });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { summeYen: null, positionen: [] });
 });
 
 Deno.test("Web-App-Manifest und Symbole sind ohne Anmeldung abrufbar", async () => {

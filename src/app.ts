@@ -8,7 +8,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { registerAuthRoutes } from "./auth.ts";
 import { BELEG_MAX, BELEG_TYPEN, registerExpenseRoutes } from "./expenses.ts";
 import { istMitglied, registerGroupRoutes } from "./groups.ts";
-import { erkenneSumme, tesseract, type Texterkennung } from "./erkennung.ts";
+import {
+  erkennePositionen,
+  erkenneSumme,
+  tesseract,
+  type Texterkennung,
+} from "./erkennung.ts";
 import { frankfurter, type Kursdienst } from "./kurs.ts";
 import { log } from "./log.ts";
 import {
@@ -90,7 +95,7 @@ export function createApp(
   app.use(
     "*",
     (c, next) =>
-      c.req.path === "/api/erkennung/summe" || c.req.path.endsWith("/beleg")
+      c.req.path.startsWith("/api/erkennung/") || c.req.path.endsWith("/beleg")
         ? belegZuGross(c, next)
         : zuGross(c, next),
   );
@@ -115,36 +120,52 @@ export function createApp(
   registerGroupRoutes(app, db);
   registerExpenseRoutes(app, db, kursdienst);
 
-  // Summenvorschlag für ein Foto vor dem Speichern; das Foto bleibt auf dem Server.
+  // Vorschläge für ein Foto vor dem Speichern; das Foto bleibt auf dem Server.
   let erkennungLaeuft = 0;
-  app.post("/api/erkennung/summe", async (c) => {
-    if (!c.get("user")) return c.json({ fehler: "Nicht angemeldet" }, 401);
-    const mime = (c.req.header("content-type") ?? "").split(";")[0].trim();
-    if (!BELEG_TYPEN.includes(mime)) {
-      return c.json({ fehler: "Beleg muss ein Bild sein" }, 400);
-    }
-    const bild = new Uint8Array(await c.req.arrayBuffer());
-    if (bild.length === 0) return c.json({ fehler: "Beleg ist leer" }, 400);
-    if (bild.length > BELEG_MAX) {
-      return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
-    }
-    if (erkennungLaeuft >= ERKENNUNG_PARALLEL) {
-      log.ereignis("erkennung.ausgelastet", { nutzerId: c.get("user")!.id });
-      return c.json({ fehler: "Texterkennung ist gerade ausgelastet" }, 429);
-    }
-    erkennungLaeuft++;
-    try {
-      const summeYen = await erkenneSumme(erkennung, bild);
-      log.ereignis("erkennung.gelaufen", {
-        nutzerId: c.get("user")!.id,
-        bytes: bild.length,
-        erkannt: summeYen !== null,
-      });
-      return c.json({ summeYen });
-    } finally {
-      erkennungLaeuft--;
-    }
-  });
+  const erkennungsroute = (
+    pfad: string,
+    auswerten: (bild: Uint8Array) => Promise<Record<string, unknown>>,
+    erkannt: (ergebnis: Record<string, unknown>) => boolean,
+  ) =>
+    app.post(pfad, async (c) => {
+      if (!c.get("user")) return c.json({ fehler: "Nicht angemeldet" }, 401);
+      const mime = (c.req.header("content-type") ?? "").split(";")[0].trim();
+      if (!BELEG_TYPEN.includes(mime)) {
+        return c.json({ fehler: "Beleg muss ein Bild sein" }, 400);
+      }
+      const bild = new Uint8Array(await c.req.arrayBuffer());
+      if (bild.length === 0) return c.json({ fehler: "Beleg ist leer" }, 400);
+      if (bild.length > BELEG_MAX) {
+        return c.json({ fehler: "Beleg ist zu groß (max. 10 MB)" }, 413);
+      }
+      if (erkennungLaeuft >= ERKENNUNG_PARALLEL) {
+        log.ereignis("erkennung.ausgelastet", { nutzerId: c.get("user")!.id });
+        return c.json({ fehler: "Texterkennung ist gerade ausgelastet" }, 429);
+      }
+      erkennungLaeuft++;
+      try {
+        const ergebnis = await auswerten(bild);
+        log.ereignis("erkennung.gelaufen", {
+          nutzerId: c.get("user")!.id,
+          pfad,
+          bytes: bild.length,
+          erkannt: erkannt(ergebnis),
+        });
+        return c.json(ergebnis);
+      } finally {
+        erkennungLaeuft--;
+      }
+    });
+  erkennungsroute(
+    "/api/erkennung/summe",
+    async (bild) => ({ summeYen: await erkenneSumme(erkennung, bild) }),
+    (e) => e.summeYen !== null,
+  );
+  erkennungsroute(
+    "/api/erkennung/positionen",
+    (bild) => erkennePositionen(erkennung, bild),
+    (e) => (e.positionen as unknown[]).length > 0,
+  );
 
   app.get("/manifest.webmanifest", (c) =>
     c.body(
