@@ -4,11 +4,11 @@
  */
 
 /** Zeilen, deren Beträge nie die Rechnungssumme sind. */
-const IGNORIERT =
+export const IGNORIERT =
   /預り|預かり|お釣|おつり|釣銭|釣り|現金|対象|消費税|内税|外税|割引|値引|ポイント|小計/;
 
 /** Schlüsselwörter, stärkste Gruppe zuerst. */
-const SCHLUESSEL = [
+export const SCHLUESSEL = [
   /お?会計|総合計|税込合計/,
   // Tesseract liest 合計 auf Thermopapier oft als 言十, 合言 oder 合主.
   /合計|言十|合言|合[主キ十]|[謗言]計/,
@@ -18,7 +18,7 @@ const SCHLUESSEL = [
 const BETRAG =
   /([¥￥]\s*)?(\d{1,3}(?:,\d{3})+|\d+)(\s*円)?(?!\d)(\s*(?:点|個|%|％|コ))?/g;
 
-function normalisiere(text: string): string {
+export function normalisiere(text: string): string {
   return text
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/，/g, ",")
@@ -32,13 +32,13 @@ function normalisiere(text: string): string {
     .replace(/[％]/g, "%");
 }
 
-interface Betrag {
+export interface Betrag {
   wert: number;
   /** Mit ¥, 円 oder Tausendertrenner – sonst könnte es eine Menge oder Nummer sein. */
   eindeutig: boolean;
 }
 
-function betraege(zeile: string): Betrag[] {
+export function betraege(zeile: string): Betrag[] {
   const treffer: Betrag[] = [];
   for (const m of zeile.matchAll(BETRAG)) {
     if (m[4]) continue; // Stückzahl oder Prozentsatz
