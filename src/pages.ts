@@ -671,13 +671,24 @@ const betragFeld = (x) => x.waehrung === "JPY"
   ? h("span", { class: "betrag" }, x.betragYen.toLocaleString("de-DE") + " ¥", h("small", {}, eur(x.betragCent)))
   : h("span", { class: "betrag" }, eur(x.betragCent));
 
+// „Für alle“, wenn jedes aktuelle Mitglied beteiligt ist, sonst die Namen.
+function fuerWen(beteiligte) {
+  if (!beteiligte.length) return "";
+  const ids = new Set(beteiligte.map((p) => p.id));
+  if (g.mitglieder.length > 1 && g.mitglieder.every((m) => ids.has(m.id))) return "Für alle";
+  const namen = beteiligte.map((p) => p.id === ich.id ? "dich" : p.name);
+  return "Für " + (namen.length > 1 ? namen.slice(0, -1).join(", ") + " und " + namen.at(-1) : namen[0]);
+}
+
 function ausgabeZeile(x) {
   const meine = x.zahler.id === ich.id;
+  const fuer = fuerWen(x.beteiligte || []);
   return h("li", {},
     h("button", { type: "button", class: "zeile-knopf", "aria-haspopup": "dialog", onclick: () => detailZeigen(x) },
       avatar(x.zahler.name, x.zahler.id),
       h("span", { class: "text" }, h("strong", {}, x.beschreibung),
-        h("small", {}, (meine ? "Du" : x.zahler.name) + " · " + datumKurz(x.datum) + (x.hatBeleg ? " · Beleg" : ""))),
+        h("small", {}, (meine ? "Du" : x.zahler.name) + " · " + datumKurz(x.datum) + (x.hatBeleg ? " · Beleg" : "")),
+        fuer ? h("small", {}, fuer) : null),
       betragFeld(x)));
 }
 
