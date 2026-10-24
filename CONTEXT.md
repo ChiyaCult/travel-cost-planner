@@ -22,7 +22,23 @@ Projekt
 oder Taiwan-Dollar (TWD) erfasst. Wird auf betroffene Mitglieder aufgeteilt.
 
 **Beleg**: Das Foto der Rechnung, das mit einer Ausgabe gespeichert wird und für
-alle Mitglieder der Gruppe sichtbar ist.
+alle Mitglieder der Gruppe sichtbar ist. Werden aus einem Foto mehrere Ausgaben
+erfasst, hat jede ihre eigene Kopie des Belegs.
+
+**Position**: Eine Zeile einer Yen-Rechnung mit Bezeichnung und Betrag, z. B.
+„おにぎり 2個 300“ (Mengen bleiben eine Position). Wird aus dem Beleg erkannt,
+ist aber nur ein Vorschlag, den der Zahler bearbeitet, ergänzt oder löscht.
+Gehört zu genau einer Ausgabe und ist für alle Mitglieder sichtbar.
+
+**Auswahl von Positionen**: Der Zahler hakt die Positionen an, die zu einer
+Ausgabe gehören; deren Betrag ergibt sich daraus und wird wie jede Ausgabe
+gleichmäßig aufgeteilt. Für eine Rechnung mit Sachen für verschiedene Mitglieder
+erfasst er mehrere Ausgaben nacheinander aus demselben Foto. Steuer und andere
+Differenz zur Rechnungssumme verteilt sich anteilig: Jede Position zählt mit dem
+Faktor Rechnungssumme ÷ Summe aller Positionen. Welche Positionen schon in einer
+anderen Ausgabe stecken, merkt sich die App nicht. Die Beschreibung („Wofür?“)
+ist hier optional; ohne sie steht die Ausgabe mit den Bezeichnungen ihrer
+Positionen in der Liste.
 
 **Zahler**: Das Mitglied, das eine Ausgabe bezahlt hat. Immer der Nutzer, der
 sie einträgt; niemand trägt Ausgaben für andere ein. Nur der Zahler kann seine

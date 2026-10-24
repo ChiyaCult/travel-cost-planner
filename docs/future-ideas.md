@@ -4,11 +4,15 @@
   Aufruf mit dem aktuellen Kurs neu berechnet. Verworfen für v1, weil sich
   Schulden dann täglich ändern und nicht nachvollziehbar sind. Aktuell gilt:
   Kurs wird beim Erfassen fixiert.
-- **Rechnungspositionen:** Alle Positionen einer Rechnung auslesen, ins Deutsche
-  übersetzen und einzeln auf Mitglieder verteilen (v1 liest nur die Summe).
+- **Positionen übersetzen:** Erkannte Positionen lokal ins Deutsche übersetzen.
+  Zurückgestellt, weil Tesseract die Bezeichnungen oft nur verstümmelt liest.
+- **Rest automatisch zuordnen:** Nach der letzten Auswahl die übrigen Positionen
+  ohne erneutes Anhaken als eigene Ausgabe erfassen. Vorerst wählt der Zahler
+  jedes Mal selbst aus.
 - **Ungleiche Anteile:** Pro Mitglied einen eigenen Betrag angeben (z. B. „Anna
-  30 €, Tom 20 €"). Wird ohnehin für die Verteilung einzelner
-  Rechnungspositionen gebraucht. In v1 gibt es nur gleichmäßige Aufteilung.
+  30 €, Tom 20 €"). Für Rechnungspositionen nicht nötig, weil jede Auswahl eine
+  eigene, gleichmäßig aufgeteilte Ausgabe wird. In v1 gibt es nur gleichmäßige
+  Aufteilung.
 - **Platzhalter-Mitglieder:** Ein Mitglied ohne Zugang (z. B. jemand, der die
   App nicht nutzen will), für das andere Nutzer Ausgaben und Begleichungen
   eintragen. Kann später mit einem echten Konto verknüpft werden. Für v1
