@@ -82,3 +82,39 @@ Deno.test("Betrag wird auf ganze Yen gerundet", () => {
     103,
   );
 });
+
+// Echte Tesseract-Ausgaben der Beispielbelege (receipt2 so, wie der Browser es
+// verkleinert hochlädt). Verlesene Namen und Preise korrigiert der Zahler.
+const bon = (n: number) =>
+  Deno.readTextFileSync(
+    new URL(`../example-receipt/receipt${n}.ocr.txt`, import.meta.url),
+  );
+
+Deno.test("Beispielbon 1: Preis in eigener Zeile gehört zur Bezeichnung darüber", () => {
+  // Gedruckt: 書籍 文庫本 831; Tesseract liest den Preis als 931.
+  assertEquals(waehlePositionen(bon(1)), [
+    { bezeichnung: "0801書籍 文庫本", betragYen: 931 },
+  ]);
+});
+
+Deno.test("Beispielbon 2: Preis ohne ¥, Bargeldzeile ist keine Position", () => {
+  const p = waehlePositionen(bon(2));
+  assertEquals(p.map((x) => x.betragYen), [685]);
+});
+
+Deno.test("Beispielbon 3: verlesene Summen- und Bargeldzeile sind keine Positionen", () => {
+  assertEquals(waehlePositionen(bon(3)), []);
+});
+
+Deno.test("Beispielbon 4: Kopfzeilen voller OCR-Rauschen sind keine Positionen", () => {
+  assertEquals(
+    waehlePositionen(bon(4)).filter((p) => p.betragYen !== 1021),
+    [],
+  );
+});
+
+Deno.test("Einzelner Artikel zum Preis der Summe bleibt eine Position", () => {
+  assertEquals(waehlePositionen("TVバーリアル 685\n合 計 ¥685\n現金 ¥1,000"), [
+    { bezeichnung: "TVバーリアル", betragYen: 685 },
+  ]);
+});

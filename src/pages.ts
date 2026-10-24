@@ -193,6 +193,7 @@ label.btn:has(input:focus-visible){outline:2px dashed var(--fokus);outline-offse
 .position.vergeben{opacity:.55}
 .position small{text-align:center;font-size:.7rem}
 .position .btn{margin:2px;padding:.35rem;min-height:2.5rem}
+.hilfe.warnung{color:var(--minus)}
 
 /* Dialoge */
 dialog.dlg{border:0;border-radius:0;padding:1.5rem;width:min(30rem,calc(100% - 2.5rem));max-height:90vh;background:var(--papier);color:var(--tinte);box-shadow:${
@@ -979,9 +980,13 @@ function rInfo() {
   const alle = summe(rPos);
   const rechnung = ganz($("r-summe").value) || alle;
   const gew = summe(rGewaehlt());
+  // Steuer liegt bei 8–10 %; weicht die Summe stärker ab, ist meist etwas verlesen.
+  const unplausibel = alle && (rechnung > alle * 1.25 || rechnung < alle * 0.8);
   $("r-info").textContent = !alle ? "Noch keine Positionen mit Betrag."
     : "Positionen " + yen(alle) + " · Rechnung " + yen(rechnung)
-      + (gew ? " · Diese Ausgabe: " + yen(Math.round(gew * rechnung / alle)) : "");
+      + (gew ? " · Diese Ausgabe: " + yen(Math.round(gew * rechnung / alle)) : "")
+      + (unplausibel ? " – Summe und Positionen passen nicht zusammen, bitte prüfen." : "");
+  $("r-info").classList.toggle("warnung", Boolean(unplausibel));
 }
 function rZeigen() {
   fuellen($("r-positionen"), rPos.map((p, i) => h("li", { class: "position" + (p.vergeben ? " vergeben" : "") },
