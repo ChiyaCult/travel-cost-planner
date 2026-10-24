@@ -110,6 +110,9 @@ input[type=checkbox]:focus-visible{outline:none}
 }}
 .btn.klein{min-height:2.25rem;padding:.35rem .7rem;font-size:.7rem}
 .btn.voll{width:calc(100% - 8px);min-height:3.25rem;font-size:.9rem}
+.btn:disabled{cursor:wait;opacity:.7;transform:none}
+.btn[aria-busy=true]::before{content:"";width:.8em;height:.8em;flex:none;box-shadow:inset 0 0 0 2px currentColor;animation:dreh .6s steps(4) infinite}
+@keyframes dreh{to{transform:rotate(90deg)}}
 .aktionen{display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem;flex-wrap:wrap}
 input[type=file].versteckt{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 label.btn:has(input:focus-visible){outline:2px dashed var(--fokus);outline-offset:4px}
@@ -360,6 +363,15 @@ const post = (url, body) => api(url, {
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body ?? {}),
 });
+// Sperrt den Knopf, solange fn läuft - verhindert doppeltes Absenden.
+async function beschaeftigt(btn, text, fn) {
+  const vorher = btn.textContent;
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+  btn.textContent = text;
+  try { return await fn(); }
+  finally { btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = vorher; }
+}
 function meldung(text, fehler = true) {
   const el = h("div", { class: "toast" + (fehler ? " fehler" : "") }, text);
   $("toasts").append(el);
@@ -583,7 +595,7 @@ export function gruppenseite(gruppeId: number): string {
     <fieldset><legend>Aufteilen auf</legend><div class="checks" id="teilnehmer"></div></fieldset>
     <div class="aktionen">
       <button class="btn sek" type="button" id="abbrechen">Abbrechen</button>
-      <button class="btn">Eintragen</button>
+      <button class="btn" id="eintragen">Eintragen</button>
     </div>
   </form>
 </dialog>
@@ -862,6 +874,7 @@ form.elements.beleg.onchange = async () => {
 };
 form.onsubmit = async (e) => {
   e.preventDefault();
+  if ($("eintragen").disabled) return;
   const f = new FormData(form);
   const zahl = Number(String(f.get("betrag")).replace(",", "."));
   const body = { beschreibung: f.get("beschreibung") };
@@ -871,11 +884,13 @@ form.onsubmit = async (e) => {
   body.teilnehmerIds = f.getAll("teilnehmer").map(Number);
   const beleg = belegBild ?? f.get("beleg");
   try {
-    const neu = await post(url("/ausgaben"), body);
-    if (beleg && beleg.size) {
-      try { await belegSenden(url("/ausgaben/" + neu.id + "/beleg"), beleg); }
-      catch (err) { meldung("Ausgabe gespeichert, Beleg nicht: " + err.message); }
-    }
+    await beschaeftigt($("eintragen"), "Speichert …", async () => {
+      const neu = await post(url("/ausgaben"), body);
+      if (beleg && beleg.size) {
+        try { await belegSenden(url("/ausgaben/" + neu.id + "/beleg"), beleg); }
+        catch (err) { meldung("Ausgabe gespeichert, Beleg nicht: " + err.message); }
+      }
+    });
     dlg.close();
     meldung("Ausgabe gespeichert", false);
     laden();
