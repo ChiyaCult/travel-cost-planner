@@ -183,6 +183,16 @@ label.btn:has(input:focus-visible){outline:2px dashed var(--fokus);outline-offse
 }}
 .nav svg{width:1.5rem;height:1.5rem;fill:currentColor;shape-rendering:crispEdges}
 .fab{position:fixed;right:1.25rem;bottom:calc(5.5rem + env(safe-area-inset-bottom));z-index:15;min-height:3.25rem;font-size:.85rem}
+.fab.links{right:auto;left:1.25rem}
+/* Zwei Knöpfe nebeneinander: auf Handybreite kleiner, damit sie sich nicht überlappen. */
+@media (max-width:420px){.fab{right:1rem;font-size:.7rem;padding:.6rem .8rem}.fab.links{left:1rem}}
+
+/* Rechnung aufteilen: eine Zeile je Position */
+.positionen{list-style:none;margin:0 0 .75rem;padding:0;display:grid;gap:.5rem}
+.position{display:grid;grid-template-columns:auto minmax(0,1fr) 5.5rem 2.75rem;gap:.5rem;align-items:center}
+.position.vergeben{opacity:.55}
+.position small{text-align:center;font-size:.7rem}
+.position .btn{margin:2px;padding:.35rem;min-height:2.5rem}
 
 /* Dialoge */
 dialog.dlg{border:0;border-radius:0;padding:1.5rem;width:min(30rem,calc(100% - 2.5rem));max-height:90vh;background:var(--papier);color:var(--tinte);box-shadow:${
@@ -381,21 +391,22 @@ const eur = (c) => (c / 100).toLocaleString("de-DE", { style: "currency", curren
 const datumKurz = (d) => new Date(d + "T00:00:00").toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
 const initialen = (n) => n.trim().split(/ +/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const avatar = (n, id) => h("span", { class: "avatar c" + (id % 5), "aria-hidden": "true" }, initialen(n));
-function bestaetigen(text, ok = "Löschen") {
+function bestaetigen(text, ok = "Löschen", art = "btn gefahr-voll") {
   return new Promise((res) => {
     const d = h("dialog", { class: "dlg", "aria-labelledby": "bt" },
       h("form", { method: "dialog" },
         h("h2", { id: "bt" }, text),
         h("div", { class: "aktionen" },
           h("button", { class: "btn sek", value: "nein", autofocus: true }, "Abbrechen"),
-          h("button", { class: "btn gefahr-voll", value: "ja" }, ok))));
+          h("button", { class: art, value: "ja" }, ok))));
     d.onclose = () => { res(d.returnValue === "ja"); d.remove(); };
     document.body.append(d);
     d.showModal();
   });
 }
 document.addEventListener("click", (e) => {
-  if (e.target instanceof HTMLDialogElement && e.target.classList.contains("dlg")) e.target.close();
+  // data-fest: Dialoge mit viel Eingabe schließen nicht durch Tippen daneben.
+  if (e.target instanceof HTMLDialogElement && e.target.classList.contains("dlg") && !("fest" in e.target.dataset)) e.target.close();
 });
 ${script}
 </script>
@@ -576,6 +587,33 @@ export function gruppenseite(gruppeId: number): string {
 </section>
 
 <button class="btn fab" id="fab" type="button"><span aria-hidden="true">＋</span> Ausgabe</button>
+<button class="btn fab links" id="fab-rechnung" type="button">Rechnung aufteilen</button>
+
+<dialog class="dlg" id="dlg-rechnung" aria-labelledby="r-titel" data-fest>
+  <form id="rechnungform" novalidate>
+    <h2 id="r-titel">Rechnung aufteilen</h2>
+    <div class="feld"><label for="r-foto">Foto der Rechnung (Yen)</label>
+    <input id="r-foto" type="file" accept="image/*" capture="environment">
+    <span class="hilfe" id="r-status" role="status"></span></div>
+    <div id="r-schritt2" hidden>
+      <fieldset><legend>Was gehört zu dieser Ausgabe?</legend>
+        <ul class="positionen" id="r-positionen"></ul>
+        <button class="btn sek klein" type="button" id="r-plus"><span aria-hidden="true">＋</span> Position</button>
+      </fieldset>
+      <div class="feld"><label for="r-summe">Rechnungssumme (¥)</label>
+      <input id="r-summe" inputmode="numeric" autocomplete="off"></div>
+      <p class="hilfe" id="r-info" aria-live="polite"></p>
+      <div class="feld"><label for="r-wofuer">Wofür? (optional)</label>
+      <input id="r-wofuer" maxlength="120" autocomplete="off"></div>
+      <div class="feld"><label for="r-datum">Datum</label><input id="r-datum" type="date"></div>
+      <fieldset><legend>Aufteilen auf</legend><div class="checks" id="r-teilnehmer"></div></fieldset>
+    </div>
+    <div class="aktionen">
+      <button class="btn sek" type="button" id="r-abbrechen">Abbrechen</button>
+      <button class="btn" id="r-eintragen" hidden>Eintragen</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog class="dlg" id="dlg-ausgabe" aria-labelledby="dlg-titel">
   <form id="ausgabeform">
@@ -624,7 +662,7 @@ function zeige(name) {
     t.tabIndex = aktiv ? 0 : -1;
     $("p-" + t.dataset.tab).hidden = !aktiv;
   }
-  $("fab").hidden = name !== "ausgaben";
+  $("fab").hidden = $("fab-rechnung").hidden = name !== "ausgaben";
   history.replaceState(null, "", "#" + name);
 }
 tabs.forEach((t, i) => {
@@ -648,6 +686,9 @@ function mitgliederZeigen() {
     h("li", {}, avatar(m.name, m.id), h("span", { class: "text" }, h("strong", {}, m.name + (m.id === ich.id ? " (du)" : ""))))));
   $("teilnehmer").replaceChildren(...g.mitglieder.map((m) =>
     h("label", { class: "check" }, h("input", { type: "checkbox", name: "teilnehmer", value: m.id, checked: true }), m.name)));
+  // Rechnung aufteilen: niemand vorausgewählt, damit die Auswahl bewusst fällt.
+  $("r-teilnehmer").replaceChildren(...g.mitglieder.map((m) =>
+    h("label", { class: "check" }, h("input", { type: "checkbox", value: m.id }), m.name)));
   $("stempel").replaceChildren(...g.mitglieder.map((m) => avatar(m.name, m.id)));
   $("stempel").setAttribute("aria-label", "Mitglieder: " + g.mitglieder.map((m) => m.name).join(", "));
   $("allein").hidden = g.mitglieder.length > 1;
@@ -682,6 +723,15 @@ $("mitgliedform").onsubmit = async (e) => {
 // Fremdwährungen werden in ganzen Einheiten erfasst; Anzeige mit Symbol.
 const SYMBOLE = { JPY: "¥", TWD: "NT$" };
 const fremd = (x) => x.betragFremd.toLocaleString("de-DE") + " " + SYMBOLE[x.waehrung];
+const yen = (n) => n.toLocaleString("de-DE") + " ¥";
+const summe = (positionen) => positionen.reduce((a, p) => a + p.betragYen, 0);
+// Ohne Beschreibung stehen die Positionen im Titel.
+function titel(x) {
+  if (x.beschreibung) return x.beschreibung;
+  const p = x.positionen || [];
+  if (!p.length) return "Ausgabe";
+  return p.slice(0, 2).map((q) => q.bezeichnung).join(", ") + (p.length > 2 ? " +" + (p.length - 2) : "");
+}
 const betragFeld = (x) => x.waehrung !== "EUR"
   ? h("span", { class: "betrag" }, fremd(x), h("small", {}, eur(x.betragCent)))
   : h("span", { class: "betrag" }, eur(x.betragCent));
@@ -701,7 +751,7 @@ function ausgabeZeile(x) {
   return h("li", {},
     h("button", { type: "button", class: "zeile-knopf", "aria-haspopup": "dialog", onclick: () => detailZeigen(x) },
       avatar(x.zahler.name, x.zahler.id),
-      h("span", { class: "text" }, h("strong", {}, x.beschreibung),
+      h("span", { class: "text" }, h("strong", {}, titel(x)),
         h("small", {}, (meine ? "Du" : x.zahler.name) + " · " + datumKurz(x.datum) + (x.hatBeleg ? " · Beleg" : "")),
         fuer ? h("small", {}, fuer) : null),
       betragFeld(x)));
@@ -733,7 +783,7 @@ function detailZeigen(x) {
       } }, "Beleg entfernen"));
     }
     aktionen.push(h("button", { class: "btn gefahr klein", type: "button", onclick: async () => {
-      if (!await bestaetigen("„" + x.beschreibung + "“ löschen?")) return;
+      if (!await bestaetigen("„" + titel(x) + "“ löschen?")) return;
       try { await api(url("/ausgaben/" + x.id), { method: "DELETE" }); meldung("Ausgabe gelöscht", false); }
       catch (err) { meldung(err.message); }
       fertig();
@@ -741,9 +791,12 @@ function detailZeigen(x) {
   }
   const istFremd = x.waehrung !== "EUR";
   const beteiligte = x.beteiligte || [];
+  const positionen = x.positionen || [];
+  // Steuer und andere Differenz zur Rechnungssumme, anteilig auf diese Ausgabe.
+  const rest = positionen.length ? x.betragFremd - summe(positionen) : 0;
   fuellen($("detail"),
     h("h2", {}, "Ausgabe"),
-    h("p", { class: "detail-titel", id: "detail-titel" }, x.beschreibung),
+    h("p", { class: "detail-titel", id: "detail-titel" }, titel(x)),
     h("div", { class: "detail-betrag" },
       istFremd ? fremd(x) : eur(x.betragCent),
       istFremd ? h("small", {}, "= " + eur(x.betragCent)) : null),
@@ -757,9 +810,22 @@ function detailZeigen(x) {
           h("span", { class: "text" }, h("strong", {}, p.id === ich.id ? "Du" : p.name)),
           h("span", { class: "betrag" }, eur(p.anteilCent))))))
       : null,
+    positionen.length
+      ? h("div", { class: "aufteilung" },
+        h("h3", {}, positionen.length + (positionen.length === 1 ? " Position" : " Positionen")),
+        h("ul", { class: "liste" },
+          positionen.map((p) => h("li", {},
+            h("span", { class: "text" }, h("strong", {}, p.bezeichnung)),
+            h("span", { class: "betrag" }, yen(p.betragYen)))),
+          rest
+            ? h("li", {},
+              h("span", { class: "text" }, h("small", {}, "Steuer/Rest anteilig")),
+              h("span", { class: "betrag" }, (rest > 0 ? "+" : "−") + yen(Math.abs(rest))))
+            : null))
+      : null,
     x.hatBeleg
       ? h("a", { class: "beleg-gross", href: beleg, target: "_blank", "aria-label": "Beleg in voller Größe öffnen" },
-        h("img", { src: beleg, alt: "Beleg zu " + x.beschreibung }))
+        h("img", { src: beleg, alt: "Beleg zu " + titel(x) }))
       : h("p", {}, h("small", {}, "Kein Beleg")),
     aktionen.length ? h("div", { class: "aktionen links" }, aktionen) : null,
     h("div", { class: "aktionen" }, h("button", { class: "btn sek", type: "button", onclick: () => dlgDetail.close() }, "Schließen")));
@@ -895,6 +961,118 @@ form.onsubmit = async (e) => {
     meldung("Ausgabe gespeichert", false);
     laden();
   } catch (err) { meldung(err.message); }
+};
+
+// Rechnung aufteilen: die Positionen eines Fotos nacheinander auf Ausgaben verteilen.
+// Was schon in einer Ausgabe steckt, merkt sich nur dieser Dialog.
+const dlgR = $("dlg-rechnung");
+const formR = $("rechnungform");
+let rBild = null;
+let rPos = [];
+const ganz = (v) => {
+  const n = Number(String(v).replace(/[., ]/g, ""));
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+};
+const rGewaehlt = () => rPos.filter((p) => p.gewaehlt && !p.vergeben);
+const rTeilnehmer = () => [...$("r-teilnehmer").querySelectorAll("input")];
+function rInfo() {
+  const alle = summe(rPos);
+  const rechnung = ganz($("r-summe").value) || alle;
+  const gew = summe(rGewaehlt());
+  $("r-info").textContent = !alle ? "Noch keine Positionen mit Betrag."
+    : "Positionen " + yen(alle) + " · Rechnung " + yen(rechnung)
+      + (gew ? " · Diese Ausgabe: " + yen(Math.round(gew * rechnung / alle)) : "");
+}
+function rZeigen() {
+  fuellen($("r-positionen"), rPos.map((p, i) => h("li", { class: "position" + (p.vergeben ? " vergeben" : "") },
+    h("input", { type: "checkbox", "aria-label": "Position " + (i + 1) + " auswählen", checked: p.gewaehlt, disabled: p.vergeben,
+      onchange: (e) => { p.gewaehlt = e.target.checked; rInfo(); } }),
+    h("input", { value: p.bezeichnung, maxlength: 120, autocomplete: "off", "aria-label": "Bezeichnung", disabled: p.vergeben,
+      oninput: (e) => { p.bezeichnung = e.target.value; } }),
+    h("input", { value: p.betragYen || "", inputmode: "numeric", autocomplete: "off", "aria-label": "Betrag in Yen", disabled: p.vergeben,
+      oninput: (e) => { p.betragYen = ganz(e.target.value); rInfo(); } }),
+    p.vergeben
+      ? h("small", {}, "vergeben")
+      : h("button", { type: "button", class: "btn sek klein", "aria-label": "Position entfernen",
+        onclick: () => { rPos.splice(i, 1); rZeigen(); } }, "✕"))));
+  rInfo();
+}
+function rNeu() {
+  rPos.push({ bezeichnung: "", betragYen: 0, gewaehlt: true, vergeben: false });
+  rZeigen();
+  $("r-positionen").lastElementChild.querySelectorAll("input")[1].focus();
+}
+$("fab-rechnung").onclick = () => {
+  formR.reset();
+  rBild = null;
+  rPos = [];
+  $("r-status").textContent = "";
+  $("r-schritt2").hidden = $("r-eintragen").hidden = true;
+  $("r-datum").value = new Date().toLocaleDateString("sv-SE");
+  for (const t of rTeilnehmer()) t.checked = false;
+  dlgR.showModal();
+};
+$("r-abbrechen").onclick = () => dlgR.close();
+$("r-plus").onclick = rNeu;
+$("r-summe").oninput = rInfo;
+$("r-foto").onchange = async () => {
+  const datei = $("r-foto").files[0];
+  const status = $("r-status");
+  rBild = null;
+  if (!datei) return;
+  status.textContent = "Positionen werden gelesen …";
+  let erkannt = { summeYen: null, positionen: [] };
+  try {
+    rBild = await verkleinern(datei);
+    erkannt = await api("/api/erkennung/positionen", { method: "POST", headers: { "content-type": rBild.type }, body: rBild });
+    status.textContent = erkannt.positionen.length
+      ? erkannt.positionen.length + " Positionen erkannt – bitte prüfen und korrigieren."
+      : "Keine Positionen erkannt – bitte eintippen.";
+  } catch { status.textContent = "Foto nicht lesbar – Positionen bitte eintippen."; }
+  rPos = erkannt.positionen.map((p) => ({ ...p, gewaehlt: false, vergeben: false }));
+  $("r-summe").value = erkannt.summeYen ?? "";
+  $("r-schritt2").hidden = $("r-eintragen").hidden = false;
+  if (rPos.length) rZeigen(); else rNeu();
+};
+formR.onsubmit = async (e) => {
+  e.preventDefault();
+  if ($("r-eintragen").disabled) return;
+  const gew = rGewaehlt();
+  if (!gew.length) { meldung("Hake mindestens eine Position an."); return; }
+  if (gew.some((p) => !p.bezeichnung.trim() || !p.betragYen)) {
+    meldung("Jede angehakte Position braucht Bezeichnung und Betrag.");
+    return;
+  }
+  const teilnehmerIds = rTeilnehmer().filter((t) => t.checked).map((t) => Number(t.value));
+  if (!teilnehmerIds.length) { meldung("Wähle aus, auf wen die Ausgabe verteilt wird."); return; }
+  const alle = summe(rPos);
+  const body = {
+    waehrung: "JPY",
+    positionen: gew.map((p) => ({ bezeichnung: p.bezeichnung.trim(), betragYen: p.betragYen })),
+    allePositionenYen: alle,
+    rechnungssummeYen: ganz($("r-summe").value) || alle,
+    beschreibung: $("r-wofuer").value,
+    teilnehmerIds,
+  };
+  if ($("r-datum").value) body.datum = $("r-datum").value;
+  try {
+    await beschaeftigt($("r-eintragen"), "Speichert …", async () => {
+      const neu = await post(url("/ausgaben"), body);
+      // Jede Ausgabe bekommt ihre eigene Kopie des Belegs.
+      if (rBild) {
+        try { await belegSenden(url("/ausgaben/" + neu.id + "/beleg"), rBild); }
+        catch (err) { meldung("Ausgabe gespeichert, Beleg nicht: " + err.message); }
+      }
+    });
+  } catch (err) { meldung(err.message); return; }
+  for (const p of gew) { p.vergeben = true; p.gewaehlt = false; }
+  $("r-wofuer").value = "";
+  for (const t of rTeilnehmer()) t.checked = false;
+  meldung("Ausgabe gespeichert", false);
+  laden();
+  if (rPos.some((p) => !p.vergeben) && await bestaetigen("Weitere Positionen dieses Belegs verteilen?", "Weiter verteilen", "btn")) {
+    rZeigen();
+  } else dlgR.close();
 };
 
 (async () => {

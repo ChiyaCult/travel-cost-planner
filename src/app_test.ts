@@ -1125,6 +1125,8 @@ Deno.test("Gruppenseite bietet Beleg hinzufügen und entfernen; Fremde werden um
   const html = await (await app.request(`/gruppen/${g.id}`, { headers }))
     .text();
   assertStringIncludes(html, "Beleg hinzufügen");
+  assertStringIncludes(html, "Rechnung aufteilen");
+  assertStringIncludes(html, "/api/erkennung/positionen");
   assertStringIncludes(html, "Beleg entfernen");
   assertStringIncludes(html, 'method: "DELETE"');
   assertStringIncludes(html, 'id="plus-mitglied"');
@@ -1288,13 +1290,14 @@ Deno.test("Gruppenseite verkleinert Belegfotos vor dem Hochladen", async () => {
   db.prepare("INSERT INTO group_members (group_id, user_id) VALUES (1, ?)")
     .run(userId + 1);
   const html = await (await app.request("/gruppen/1", { headers })).text();
-  // Verkleinert wird bei der Auswahl im Formular und beim Ersetzen; das
-  // Speichern nimmt das dabei erzeugte Bild (Definition + 2 Aufrufe).
+  // Verkleinert wird bei der Auswahl in beiden Formularen und beim Ersetzen;
+  // das Speichern nimmt das dabei erzeugte Bild (Definition + 3 Aufrufe).
   assertStringIncludes(html, "BELEG_KANTE = 1600");
   assertStringIncludes(html, "belegBild = await verkleinern(datei)");
   assertStringIncludes(html, "belegSenden(beleg, await verkleinern(datei))");
   assertStringIncludes(html, 'const beleg = belegBild ?? f.get("beleg")');
-  assertEquals(html.split("verkleinern(").length - 1, 3);
+  assertStringIncludes(html, "rBild = await verkleinern(datei)");
+  assertEquals(html.split("verkleinern(").length - 1, 4);
 });
 
 Deno.test("Sitzung läuft nach 30 Tagen auch serverseitig ab", async () => {
