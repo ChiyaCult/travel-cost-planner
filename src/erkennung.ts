@@ -1,4 +1,5 @@
 import { log } from "./log.ts";
+import { type Position, waehlePositionen } from "./positionen.ts";
 import { waehleSumme } from "./summe.ts";
 
 /** Grenze zur lokalen Texterkennung; Tests setzen einen Fake ein. */
@@ -39,5 +40,19 @@ export async function erkenneSumme(
     // (z. B. fehlendes Tesseract oder Zeitüberschreitung).
     log.fehler("erkennung.fehlgeschlagen", e, { bytes: bild.length });
     return null;
+  }
+}
+
+/** Summe und Positionen aus einem Lesevorgang; bei Fehlern null und keine Positionen. */
+export async function erkennePositionen(
+  erkennung: Texterkennung,
+  bild: Uint8Array,
+): Promise<{ summeYen: number | null; positionen: Position[] }> {
+  try {
+    const text = await erkennung.lies(bild);
+    return { summeYen: waehleSumme(text), positionen: waehlePositionen(text) };
+  } catch (e) {
+    log.fehler("erkennung.fehlgeschlagen", e, { bytes: bild.length });
+    return { summeYen: null, positionen: [] };
   }
 }

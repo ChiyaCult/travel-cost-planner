@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS expense_shares (
   share_cents INTEGER NOT NULL,
   PRIMARY KEY (expense_id, user_id)
 );
+-- Positionen einer Yen-Rechnung, aus denen sich der Betrag der Ausgabe ergibt.
+CREATE TABLE IF NOT EXISTS expense_items (
+  id INTEGER PRIMARY KEY,
+  expense_id INTEGER NOT NULL REFERENCES expenses(id),
+  description TEXT NOT NULL,
+  amount_yen INTEGER NOT NULL
+);
 -- Begleichung: from_id (der Eintragende) hat to_id außerhalb der App bezahlt.
 CREATE TABLE IF NOT EXISTS settlements (
   id INTEGER PRIMARY KEY,

@@ -7,6 +7,7 @@ import {
   type Kursdienst,
 } from "./kurs.ts";
 import { istMitglied, mitglieder } from "./groups.ts";
+import { betragAusPositionen, type Position } from "./positionen.ts";
 import { log } from "./log.ts";
 
 /** Gleichmäßig in ganzen Cent; der Restcent geht einzeln an die ersten Mitglieder. */
@@ -53,6 +54,7 @@ export function registerExpenseRoutes(
       beschreibung: string;
       datum: string;
       betroffene: { id: number }[];
+      positionen: Position[] | null;
     }
   > {
     const body = await c.req.json().catch(() => ({})) as {
@@ -63,6 +65,9 @@ export function registerExpenseRoutes(
       beschreibung?: unknown;
       datum?: unknown;
       teilnehmerIds?: unknown;
+      positionen?: unknown;
+      allePositionenYen?: unknown;
+      rechnungssummeYen?: unknown;
     };
     const waehrung = body.waehrung ?? "EUR";
     if (
@@ -76,7 +81,34 @@ export function registerExpenseRoutes(
     const beschreibung = typeof body.beschreibung === "string"
       ? body.beschreibung.trim()
       : "";
-    if (!beschreibung) return { fehler: { fehler: "Beschreibung fehlt" } };
+    // Aus Positionen: Betrag ergibt sich daraus, Beschreibung ist optional.
+    let positionen: Position[] | null = null;
+    if (body.positionen !== undefined) {
+      const p = body.positionen;
+      if (
+        waehrung !== "JPY" || !Array.isArray(p) || p.length === 0 ||
+        !p.every((x) =>
+          typeof x?.bezeichnung === "string" && x.bezeichnung.trim() &&
+          x.bezeichnung.length <= 120 && ganzePositive(x.betragYen)
+        ) ||
+        !ganzePositive(body.allePositionenYen) ||
+        !ganzePositive(body.rechnungssummeYen) ||
+        p.reduce((a, x) => a + x.betragYen, 0) > body.allePositionenYen
+      ) {
+        return { fehler: { fehler: "Positionen ungültig" } };
+      }
+      positionen = p.map((x) => ({
+        bezeichnung: x.bezeichnung.trim(),
+        betragYen: x.betragYen,
+      }));
+      body.betragFremd = betragAusPositionen({
+        gewaehltYen: positionen.map((x) => x.betragYen),
+        allePositionenYen: body.allePositionenYen,
+        rechnungssummeYen: body.rechnungssummeYen,
+      });
+    } else if (!beschreibung) {
+      return { fehler: { fehler: "Beschreibung fehlt" } };
+    }
     const datum = body.datum === undefined ? heute() : body.datum;
     if (typeof datum !== "string" || !gueltigesDatum(datum)) {
       return { fehler: { fehler: "Datum ungültig" } };
@@ -134,7 +166,15 @@ export function registerExpenseRoutes(
       }
       betroffene = alle.filter((m) => ids.includes(m.id));
     }
-    return { betragCent, fremd, kurs, beschreibung, datum, betroffene };
+    return {
+      betragCent,
+      fremd,
+      kurs,
+      beschreibung,
+      datum,
+      betroffene,
+      positionen,
+    };
   }
 
   const waehrungsfelder = (
@@ -153,7 +193,15 @@ export function registerExpenseRoutes(
     if ("fehler" in eingabe) {
       return c.json(eingabe.fehler, eingabe.status ?? 400);
     }
-    const { betragCent, fremd, kurs, beschreibung, datum, betroffene } = eingabe;
+    const {
+      betragCent,
+      fremd,
+      kurs,
+      beschreibung,
+      datum,
+      betroffene,
+      positionen,
+    } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
@@ -177,6 +225,12 @@ export function registerExpenseRoutes(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
       );
       betroffene.forEach((m, i) => ins.run(id, m.id, anteile[i]));
+      const insPos = db.prepare(
+        "INSERT INTO expense_items (expense_id, description, amount_yen) VALUES (?, ?, ?)",
+      );
+      for (const p of positionen ?? []) {
+        insPos.run(id, p.bezeichnung, p.betragYen);
+      }
       db.exec("COMMIT");
       log.ereignis("ausgabe.erfasst", {
         ausgabeId: id,
@@ -241,11 +295,25 @@ export function registerExpenseRoutes(
   app.put("/api/gruppen/:id/ausgaben/:ausgabeId", async (c) => {
     const r = eigeneAusgabe(c);
     if (r.antwort) return r.antwort;
+    // Betrag und Positionen dürfen nicht auseinanderlaufen: löschen und neu erfassen.
+    const ausPositionen = db
+      .prepare("SELECT 1 FROM expense_items WHERE expense_id = ? LIMIT 1")
+      .get(r.id);
+    if (ausPositionen) {
+      return c.json(
+        { fehler: "Ausgabe aus Positionen kann nicht geändert werden" },
+        409,
+      );
+    }
     const eingabe = await pruefeEingabe(c, r.gruppeId, r.bisher);
     if ("fehler" in eingabe) {
       return c.json(eingabe.fehler, eingabe.status ?? 400);
     }
-    const { betragCent, fremd, kurs, beschreibung, datum, betroffene } = eingabe;
+    if (eingabe.positionen) {
+      return c.json({ fehler: "Positionen nur beim Erfassen möglich" }, 400);
+    }
+    const { betragCent, fremd, kurs, beschreibung, datum, betroffene } =
+      eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
@@ -356,6 +424,7 @@ export function registerExpenseRoutes(
     try {
       db.prepare("DELETE FROM receipts WHERE expense_id = ?").run(r.id);
       db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
+      db.prepare("DELETE FROM expense_items WHERE expense_id = ?").run(r.id);
       db.prepare("DELETE FROM expenses WHERE id = ?").run(r.id);
       db.exec("COMMIT");
     } catch (e) {
@@ -421,9 +490,31 @@ export function registerExpenseRoutes(
       liste.push({ id: a.nutzerId, name: a.name, anteilCent: a.anteilCent });
       anteileJeAusgabe.set(a.ausgabeId, liste);
     }
+    const positionszeilen = db
+      .prepare(
+        `SELECT i.expense_id AS ausgabeId, i.description AS bezeichnung,
+                i.amount_yen AS betragYen
+         FROM expense_items i JOIN expenses e ON e.id = i.expense_id
+         WHERE e.group_id = ? ORDER BY i.id`,
+      )
+      .all(gruppeId) as unknown as ({ ausgabeId: number } & Position)[];
+    const positionenJeAusgabe = new Map<number, Position[]>();
+    for (const { ausgabeId, ...p } of positionszeilen) {
+      const liste = positionenJeAusgabe.get(ausgabeId) ?? [];
+      liste.push(p);
+      positionenJeAusgabe.set(ausgabeId, liste);
+    }
     return c.json(
       zeilen.map((
-        { zahlerId, zahlerName, fremdWaehrung, fremdBetrag, kurs, hatBeleg, ...rest },
+        {
+          zahlerId,
+          zahlerName,
+          fremdWaehrung,
+          fremdBetrag,
+          kurs,
+          hatBeleg,
+          ...rest
+        },
       ) => ({
         ...rest,
         hatBeleg: hatBeleg === 1,
@@ -435,6 +526,7 @@ export function registerExpenseRoutes(
         ),
         zahler: { id: zahlerId, name: zahlerName },
         beteiligte: anteileJeAusgabe.get(rest.id) ?? [],
+        positionen: positionenJeAusgabe.get(rest.id) ?? [],
       })),
     );
   });

@@ -6,12 +6,16 @@ Alle nennenswerten Änderungen an der App, neueste zuerst.
 
 ### Neu
 
+- „Rechnung aufteilen“: Positionen einer Yen-Rechnung aus dem Foto lesen,
+  anhaken und nacheinander als eigene Ausgaben auf Mitglieder verteilen; Steuer
+  wird anteilig verteilt, die Positionen stehen in der Detailansicht
 - Taiwan-Dollar (TWD) als Währung mit Kursumrechnung
 - Die Ausgabenliste zeigt, auf wen der Betrag verteilt wurde
 
 ### Behoben
 
-- Beim Speichern einer Ausgabe ist der Knopf gesperrt und zeigt „Speichert …“, damit sie nicht mehrfach angelegt wird
+- Beim Speichern einer Ausgabe ist der Knopf gesperrt und zeigt „Speichert …“,
+  damit sie nicht mehrfach angelegt wird
 
 ## 2026-09-20
 
@@ -52,7 +56,8 @@ Alle nennenswerten Änderungen an der App, neueste zuerst.
 
 ### Behoben
 
-- Docker: Rechte für `/data` werden beim Start gesetzt, damit SQLite schreiben kann
+- Docker: Rechte für `/data` werden beim Start gesetzt, damit SQLite schreiben
+  kann
 
 ### Sicherheit
 
