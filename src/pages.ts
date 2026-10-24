@@ -572,7 +572,7 @@ export function gruppenseite(gruppeId: number): string {
       <div class="feld"><label for="betrag">Betrag</label>
       <input id="betrag" name="betrag" inputmode="decimal" required autocomplete="off"></div>
       <div class="feld"><label for="waehrung">Währung</label>
-      <select id="waehrung" name="waehrung"><option value="EUR">€</option><option value="JPY">¥</option></select></div>
+      <select id="waehrung" name="waehrung"><option value="EUR">€</option><option value="JPY">¥</option><option value="TWD">NT$</option></select></div>
     </div>
     <div class="feld"><label for="beschreibung">Wofür?</label>
     <input id="beschreibung" name="beschreibung" required maxlength="120" autocomplete="off"></div>
@@ -667,8 +667,11 @@ $("mitgliedform").onsubmit = async (e) => {
   try { g = await api("/api/gruppen/" + GID); mitgliederZeigen(); } catch {}
 };
 
-const betragFeld = (x) => x.waehrung === "JPY"
-  ? h("span", { class: "betrag" }, x.betragYen.toLocaleString("de-DE") + " ¥", h("small", {}, eur(x.betragCent)))
+// Fremdwährungen werden in ganzen Einheiten erfasst; Anzeige mit Symbol.
+const SYMBOLE = { JPY: "¥", TWD: "NT$" };
+const fremd = (x) => x.betragFremd.toLocaleString("de-DE") + " " + SYMBOLE[x.waehrung];
+const betragFeld = (x) => x.waehrung !== "EUR"
+  ? h("span", { class: "betrag" }, fremd(x), h("small", {}, eur(x.betragCent)))
   : h("span", { class: "betrag" }, eur(x.betragCent));
 
 // „Für alle“, wenn jedes aktuelle Mitglied beteiligt ist, sonst die Namen.
@@ -724,15 +727,15 @@ function detailZeigen(x) {
       fertig();
     } }, "Löschen"));
   }
-  const yen = x.waehrung === "JPY";
+  const istFremd = x.waehrung !== "EUR";
   const beteiligte = x.beteiligte || [];
   fuellen($("detail"),
     h("h2", {}, "Ausgabe"),
     h("p", { class: "detail-titel", id: "detail-titel" }, x.beschreibung),
     h("div", { class: "detail-betrag" },
-      yen ? x.betragYen.toLocaleString("de-DE") + " ¥" : eur(x.betragCent),
-      yen ? h("small", {}, "= " + eur(x.betragCent)) : null),
-    yen && x.kurs ? h("small", {}, "Kurs: 1 € = " + (1 / x.kurs).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " ¥") : null,
+      istFremd ? fremd(x) : eur(x.betragCent),
+      istFremd ? h("small", {}, "= " + eur(x.betragCent)) : null),
+    istFremd && x.kurs ? h("small", {}, "Kurs: 1 € = " + (1 / x.kurs).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " " + SYMBOLE[x.waehrung]) : null,
     h("p", {}, "Bezahlt von " + (meine ? "dir" : x.zahler.name) + " am " + datumKurz(x.datum)),
     beteiligte.length
       ? h("div", { class: "aufteilung" },
@@ -862,7 +865,7 @@ form.onsubmit = async (e) => {
   const f = new FormData(form);
   const zahl = Number(String(f.get("betrag")).replace(",", "."));
   const body = { beschreibung: f.get("beschreibung") };
-  if (f.get("waehrung") === "JPY") { body.waehrung = "JPY"; body.betragYen = zahl; }
+  if (f.get("waehrung") !== "EUR") { body.waehrung = f.get("waehrung"); body.betragFremd = zahl; }
   else body.betragCent = Math.round(zahl * 100);
   if (f.get("datum")) body.datum = f.get("datum");
   body.teilnehmerIds = f.getAll("teilnehmer").map(Number);

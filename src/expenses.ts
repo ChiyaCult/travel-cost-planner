@@ -1,7 +1,11 @@
 import type { Context, Hono } from "@hono/hono";
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "./app.ts";
-import type { Kursdienst } from "./kurs.ts";
+import {
+  type Fremdwaehrung,
+  FREMDWAEHRUNGEN,
+  type Kursdienst,
+} from "./kurs.ts";
 import { istMitglied, mitglieder } from "./groups.ts";
 import { log } from "./log.ts";
 
@@ -39,12 +43,12 @@ export function registerExpenseRoutes(
   async function pruefeEingabe(
     c: Context<Env>,
     gruppeId: number,
-    bisherKurs: number | null = null,
+    bisher: { waehrung: string | null; kurs: number | null } | null = null,
   ): Promise<
     | { fehler: { fehler: string }; status?: 400 | 502 }
     | {
       betragCent: number;
-      yen: number | null;
+      fremd: { waehrung: Fremdwaehrung; betrag: number } | null;
       kurs: number | null;
       beschreibung: string;
       datum: string;
@@ -53,7 +57,7 @@ export function registerExpenseRoutes(
   > {
     const body = await c.req.json().catch(() => ({})) as {
       betragCent?: unknown;
-      betragYen?: unknown;
+      betragFremd?: unknown;
       waehrung?: unknown;
       kurs?: unknown;
       beschreibung?: unknown;
@@ -61,7 +65,10 @@ export function registerExpenseRoutes(
       teilnehmerIds?: unknown;
     };
     const waehrung = body.waehrung ?? "EUR";
-    if (waehrung !== "EUR" && waehrung !== "JPY") {
+    if (
+      waehrung !== "EUR" &&
+      !FREMDWAEHRUNGEN.includes(waehrung as Fremdwaehrung)
+    ) {
       return { fehler: { fehler: "Währung ungültig" } };
     }
     const ganzePositive = (n: unknown): n is number =>
@@ -75,7 +82,7 @@ export function registerExpenseRoutes(
       return { fehler: { fehler: "Datum ungültig" } };
     }
     let betragCent: number;
-    let yen: number | null = null;
+    let fremd: { waehrung: Fremdwaehrung; betrag: number } | null = null;
     let kurs: number | null = null;
     if (waehrung === "EUR") {
       if (!ganzePositive(body.betragCent)) {
@@ -83,10 +90,10 @@ export function registerExpenseRoutes(
       }
       betragCent = body.betragCent;
     } else {
-      if (!ganzePositive(body.betragYen)) {
+      if (!ganzePositive(body.betragFremd)) {
         return { fehler: { fehler: "Betrag ungültig" } };
       }
-      yen = body.betragYen;
+      fremd = { waehrung: waehrung as Fremdwaehrung, betrag: body.betragFremd };
       if (body.kurs !== undefined) {
         if (
           typeof body.kurs !== "number" || !Number.isFinite(body.kurs) ||
@@ -95,11 +102,11 @@ export function registerExpenseRoutes(
           return { fehler: { fehler: "Kurs ungültig" } };
         }
         kurs = body.kurs;
-      } else if (bisherKurs !== null) {
-        kurs = bisherKurs; // gespeicherter Kurs bleibt beim Ändern fix
+      } else if (bisher?.kurs != null && bisher.waehrung === waehrung) {
+        kurs = bisher.kurs; // gespeicherter Kurs bleibt beim Ändern fix
       } else {
         try {
-          kurs = await kursdienst.yenInEuro(datum);
+          kurs = await kursdienst.inEuro(fremd.waehrung, datum);
         } catch {
           return {
             fehler: {
@@ -110,7 +117,7 @@ export function registerExpenseRoutes(
         }
       }
       // Erst der Gesamtbetrag in Euro-Cent gerundet, dann in Cent geteilt.
-      betragCent = Math.round(yen * kurs * 100);
+      betragCent = Math.round(fremd.betrag * kurs * 100);
       if (betragCent <= 0) return { fehler: { fehler: "Betrag ungültig" } };
     }
     const alle = mitglieder(db, gruppeId);
@@ -127,13 +134,16 @@ export function registerExpenseRoutes(
       }
       betroffene = alle.filter((m) => ids.includes(m.id));
     }
-    return { betragCent, yen, kurs, beschreibung, datum, betroffene };
+    return { betragCent, fremd, kurs, beschreibung, datum, betroffene };
   }
 
-  const waehrungsfelder = (yen: number | null, kurs: number | null) =>
-    yen === null
+  const waehrungsfelder = (
+    fremd: { waehrung: string; betrag: number } | null,
+    kurs: number | null,
+  ) =>
+    fremd === null
       ? { waehrung: "EUR" }
-      : { waehrung: "JPY", betragYen: yen, kurs };
+      : { waehrung: fremd.waehrung, betragFremd: fremd.betrag, kurs };
 
   app.post("/api/gruppen/:id/ausgaben", async (c) => {
     const user = c.get("user")!;
@@ -143,16 +153,25 @@ export function registerExpenseRoutes(
     if ("fehler" in eingabe) {
       return c.json(eingabe.fehler, eingabe.status ?? 400);
     }
-    const { betragCent, yen, kurs, beschreibung, datum, betroffene } = eingabe;
+    const { betragCent, fremd, kurs, beschreibung, datum, betroffene } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
       const { lastInsertRowid } = db
         .prepare(
-          `INSERT INTO expenses (group_id, payer_id, amount_cents, description, date, original_yen, exchange_rate)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO expenses (group_id, payer_id, amount_cents, description, date, original_currency, original_amount, exchange_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(gruppeId, user.id, betragCent, beschreibung, datum, yen, kurs);
+        .run(
+          gruppeId,
+          user.id,
+          betragCent,
+          beschreibung,
+          datum,
+          fremd?.waehrung ?? null,
+          fremd?.betrag ?? null,
+          kurs,
+        );
       const id = Number(lastInsertRowid);
       const ins = db.prepare(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
@@ -164,14 +183,14 @@ export function registerExpenseRoutes(
         gruppeId,
         zahlerId: user.id,
         betragCent,
-        waehrung: yen === null ? "EUR" : "JPY",
+        waehrung: fremd?.waehrung ?? "EUR",
         beteiligte: betroffene.length,
       });
       return c.json({
         id,
         zahler: { id: user.id, name: user.name },
         betragCent,
-        ...waehrungsfelder(yen, kurs),
+        ...waehrungsfelder(fremd, kurs),
         beschreibung,
         datum,
       }, 201);
@@ -190,10 +209,14 @@ export function registerExpenseRoutes(
     }
     const zeile = db
       .prepare(
-        "SELECT payer_id, exchange_rate FROM expenses WHERE id = ? AND group_id = ?",
+        "SELECT payer_id, original_currency, exchange_rate FROM expenses WHERE id = ? AND group_id = ?",
       )
       .get(Number(c.req.param("ausgabeId")), gruppeId) as
-        | { payer_id: number; exchange_rate: number | null }
+        | {
+          payer_id: number;
+          original_currency: string | null;
+          exchange_rate: number | null;
+        }
         | undefined;
     if (!zeile) {
       return { antwort: c.json({ fehler: "Ausgabe nicht gefunden" }, 404) };
@@ -211,24 +234,32 @@ export function registerExpenseRoutes(
       gruppeId,
       id: Number(c.req.param("ausgabeId")),
       user,
-      bisherKurs: zeile.exchange_rate,
+      bisher: { waehrung: zeile.original_currency, kurs: zeile.exchange_rate },
     };
   }
 
   app.put("/api/gruppen/:id/ausgaben/:ausgabeId", async (c) => {
     const r = eigeneAusgabe(c);
     if (r.antwort) return r.antwort;
-    const eingabe = await pruefeEingabe(c, r.gruppeId, r.bisherKurs);
+    const eingabe = await pruefeEingabe(c, r.gruppeId, r.bisher);
     if ("fehler" in eingabe) {
       return c.json(eingabe.fehler, eingabe.status ?? 400);
     }
-    const { betragCent, yen, kurs, beschreibung, datum, betroffene } = eingabe;
+    const { betragCent, fremd, kurs, beschreibung, datum, betroffene } = eingabe;
     const anteile = teile(betragCent, betroffene.length);
     db.exec("BEGIN");
     try {
       db.prepare(
-        "UPDATE expenses SET amount_cents = ?, description = ?, date = ?, original_yen = ?, exchange_rate = ? WHERE id = ?",
-      ).run(betragCent, beschreibung, datum, yen, kurs, r.id);
+        "UPDATE expenses SET amount_cents = ?, description = ?, date = ?, original_currency = ?, original_amount = ?, exchange_rate = ? WHERE id = ?",
+      ).run(
+        betragCent,
+        beschreibung,
+        datum,
+        fremd?.waehrung ?? null,
+        fremd?.betrag ?? null,
+        kurs,
+        r.id,
+      );
       db.prepare("DELETE FROM expense_shares WHERE expense_id = ?").run(r.id);
       const ins = db.prepare(
         "INSERT INTO expense_shares (expense_id, user_id, share_cents) VALUES (?, ?, ?)",
@@ -244,14 +275,14 @@ export function registerExpenseRoutes(
       gruppeId: r.gruppeId,
       zahlerId: r.user.id,
       betragCent,
-      waehrung: yen === null ? "EUR" : "JPY",
+      waehrung: fremd?.waehrung ?? "EUR",
       beteiligte: betroffene.length,
     });
     return c.json({
       id: r.id,
       zahler: { id: r.user.id, name: r.user.name },
       betragCent,
-      ...waehrungsfelder(yen, kurs),
+      ...waehrungsfelder(fremd, kurs),
       beschreibung,
       datum,
     });
@@ -346,7 +377,8 @@ export function registerExpenseRoutes(
     const zeilen = db
       .prepare(
         `SELECT e.id, e.amount_cents AS betragCent, e.description AS beschreibung,
-                e.date AS datum, e.original_yen AS yen, e.exchange_rate AS kurs,
+                e.date AS datum, e.original_currency AS fremdWaehrung, e.original_amount AS fremdBetrag,
+                e.exchange_rate AS kurs,
                 u.id AS zahlerId, u.name AS zahlerName,
                 EXISTS (SELECT 1 FROM receipts r WHERE r.expense_id = e.id) AS hatBeleg
          FROM expenses e JOIN users u ON u.id = e.payer_id
@@ -357,7 +389,8 @@ export function registerExpenseRoutes(
         betragCent: number;
         beschreibung: string;
         datum: string;
-        yen: number | null;
+        fremdWaehrung: string | null;
+        fremdBetrag: number | null;
         kurs: number | null;
         zahlerId: number;
         zahlerName: string;
@@ -389,10 +422,17 @@ export function registerExpenseRoutes(
       anteileJeAusgabe.set(a.ausgabeId, liste);
     }
     return c.json(
-      zeilen.map(({ zahlerId, zahlerName, yen, kurs, hatBeleg, ...rest }) => ({
+      zeilen.map((
+        { zahlerId, zahlerName, fremdWaehrung, fremdBetrag, kurs, hatBeleg, ...rest },
+      ) => ({
         ...rest,
         hatBeleg: hatBeleg === 1,
-        ...waehrungsfelder(yen, kurs),
+        ...waehrungsfelder(
+          fremdWaehrung === null
+            ? null
+            : { waehrung: fremdWaehrung, betrag: fremdBetrag! },
+          kurs,
+        ),
         zahler: { id: zahlerId, name: zahlerName },
         beteiligte: anteileJeAusgabe.get(rest.id) ?? [],
       })),
